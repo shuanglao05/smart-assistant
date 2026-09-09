@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.db
+*.sqlite3
+
+# 运行时日志
+*.log
+
+# 运行时上传的附件
+backend/uploads/
+
+# 环境变量（真实密钥，绝不入库）
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+.vite/
+# Vite 构建时生成的临时配置文件（vite build 会产生，非源码）
+vite.config.ts.timestamp-*.mjs
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store

@@ -1,0 +1,30 @@
+# ---- Web 框架 ----
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# ---- 数据与校验 ----
+sqlalchemy>=2.0
+pydantic>=2.7
+
+# ---- 认证 ----
+PyJWT>=2.8
+bcrypt>=4.1,<5.0          # 不用 passlib：passlib 1.7.4 在 Python 3.13 + bcrypt 4.x 下会报 __about__ 错误
+
+# ---- 配置 ----
+python-dotenv>=1.0
+
+# ---- 工具依赖 ----
+requests>=2.31
+python-multipart>=0.0.9     # FastAPI 文件上传表单解析
+pypdf>=4.0                  # PDF 附件正文抽取（可选，不装则 PDF 只存盘不读内容）
+# duckduckgo-search>=6.0   # P2 网页搜索，可选；装不上也不影响主流程（代码里做了容错）
+
+# ---- LangChain / Agent ----
+langchain>=0.3
+langchain-core>=0.3
+langchain-openai>=0.2     # 云端 OpenAI 兼容平台（智谱/DeepSeek/硅基流动/官方）
+langchain-ollama>=0.3     # 本地 Ollama（走原生 /api/chat，才能关闭 qwen3 的 thinking）
+langgraph>=0.2
+
+# ---- 测试 ----
+pytest>=8.0
