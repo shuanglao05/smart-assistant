@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Check, Plus, X } from 'lucide-react'
 import { todoApi } from '../api'
 import type { Todo } from '../types'
 
@@ -49,14 +50,16 @@ export default function TodoTool({ refreshKey }: { refreshKey: number }) {
           onKeyDown={(e) => e.key === 'Enter' && add()}
         />
         <button className="btn-icon" onClick={add} disabled={busy || !text.trim()} title="添加">
-          ＋
+          <Plus size={16} />
         </button>
       </div>
 
       <div className="todo-list">
         {todos.length === 0 ? (
           <div className="todo-empty">
-            <div className="todo-empty-ico">✓</div>
+            <div className="todo-empty-ico">
+              <Check size={20} />
+            </div>
             <p>还没有待办</p>
             <span>也可以直接问助理「帮我记一下…」</span>
           </div>
@@ -64,13 +67,13 @@ export default function TodoTool({ refreshKey }: { refreshKey: number }) {
           todos.map((t) => (
             <div key={t.id} className={`todo-item ${t.done ? 'done' : ''}`}>
               <button className="check" onClick={() => toggle(t)} aria-label="切换完成">
-                {t.done ? '✓' : ''}
+                {t.done ? <Check size={12} /> : ''}
               </button>
               <span className="todo-task" onClick={() => toggle(t)}>
                 {t.task}
               </span>
               <button className="todo-del" onClick={() => remove(t.id)} title="删除">
-                ×
+                <X size={15} />
               </button>
             </div>
           ))

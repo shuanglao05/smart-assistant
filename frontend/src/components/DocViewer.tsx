@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { Download, FileText, X } from 'lucide-react'
 import { filesApi } from '../api'
 import type { FileDetail } from '../types'
 
@@ -71,7 +72,7 @@ export default function DocViewer({
       <aside className="doc-viewer" role="dialog" aria-label="文档查看">
         <div className="doc-viewer-head">
           <div className="doc-viewer-title">
-            <span className="doc-ico">📄</span>
+            <span className="doc-ico"><FileText size={18} /></span>
             <div className="doc-meta">
               <div className="doc-name" title={filename}>
                 {filename}
@@ -81,10 +82,10 @@ export default function DocViewer({
           </div>
           <div className="doc-viewer-actions">
             <button className="doc-btn" onClick={download} disabled={!detail} title="下载原文">
-              ⬇ 下载
+              <Download size={14} /> 下载
             </button>
             <button className="doc-btn close" onClick={onClose} title="关闭" aria-label="关闭">
-              ×
+              <X size={18} />
             </button>
           </div>
         </div>

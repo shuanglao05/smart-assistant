@@ -1,68 +1,71 @@
 /* ============================================================
-   Codex 风格 · 双主题（默认深色 / 可切浅色）
+   DeepSeek 蓝白风 · 双主题（默认深色 / 可切浅色）
    主题通过 <html data-theme="dark|light"> 切换
+   品牌色：单一蓝 #4D6BFE + 浅蓝 tint #EDF1FF
    ============================================================ */
 
-/* ---------------- 浅色（fallback） ---------------- */
+/* ---------------- 浅色（DeepSeek 蓝白） ---------------- */
 :root {
   --bg: #ffffff;
-  --panel: #f7f7f8;
-  --panel-2: #ffffff;
-  --panel-3: #ececec;
-  --ink: #0d0d0d;
-  --ink-soft: #5f6368;
-  --ink-dim: #9aa0a6;
-  --line: #e3e3e3;
-  --line-soft: #efefef;
+  --panel: #f8f9fb;        /* 侧栏 / 面板底 */
+  --panel-2: #ffffff;      /* 卡片 / 输入底 */
+  --panel-3: #eef1f6;      /* 悬停 / 浅块 / chip */
+  --ink: #1b1f2a;          /* 主文字（近黑，非纯黑） */
+  --ink-soft: #5b6472;     /* 次文字 */
+  --ink-dim: #9aa3b2;      /* 提示文字 */
+  --line: #e6e9f0;         /* 描边 */
+  --line-soft: #f0f2f7;    /* 更浅的分隔线 */
 
-  --brand: #0d0d0d; /* 主按钮底 */
-  --brand-hover: #2b2b2b;
-  --brand-ink: #ffffff; /* 主按钮字 */
+  --brand: #4d6bfe;        /* 品牌蓝：主按钮 / 选中态 */
+  --brand-hover: #3d5bf0;
+  --brand-ink: #ffffff;    /* 品牌底色上的字 */
   --brand-grad: var(--brand); /* 兼容旧引用（纯色，无渐变） */
-  --accent: #2563eb; /* 焦点/链接/激活 */
+  --brand-tint: #edf1ff;   /* 品牌浅底：用户气泡 / 激活项 */
+  --accent: #4d6bfe;       /* 焦点 / 链接 */
 
-  --user-bubble: #f0f0f0;
-  --danger: #dc2626;
-  --ok: #10b981;
-  --warn: #f59e0b;
+  --user-bubble: #edf1ff;  /* 用户气泡（浅蓝） */
+  --danger: #e5484d;
+  --ok: #12a594;
+  --warn: #d98a1f;
 
   --r-sm: 8px;
-  --r: 12px;
+  --r: 10px;
   --r-lg: 14px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.18);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow: 0 6px 20px rgba(16, 24, 40, 0.10);
+  --shadow-lg: 0 16px 48px rgba(16, 24, 40, 0.18);
 
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
-/* ---------------- 深色（Codex 默认） ---------------- */
+/* ---------------- 深色（同色系深底） ---------------- */
 [data-theme='dark'] {
-  --bg: #0d0d0d;
-  --panel: #171717;
-  --panel-2: #1f1f1f;
-  --panel-3: #2b2b2b;
-  --ink: #ececec;
-  --ink-soft: #9b9b9b;
-  --ink-dim: #6b6b6b;
-  --line: #2e2e2e;
-  --line-soft: #242424;
+  --bg: #14161c;
+  --panel: #191c23;
+  --panel-2: #1f232b;
+  --panel-3: #2a2f39;
+  --ink: #e9ecf1;
+  --ink-soft: #a3acbb;
+  --ink-dim: #6b7482;
+  --line: #2a2f39;
+  --line-soft: #22262e;
 
-  --brand: #ffffff;
-  --brand-hover: #d4d4d4;
-  --brand-ink: #0d0d0d;
+  --brand: #4d6bfe;
+  --brand-hover: #6b85ff;
+  --brand-ink: #ffffff;
   --brand-grad: var(--brand);
-  --accent: #60a5fa;
+  --brand-tint: #232a45;
+  --accent: #7d95ff;
 
-  --user-bubble: #2f2f2f;
-  --danger: #ef4444;
-  --ok: #34d399;
-  --warn: #fbbf24;
+  --user-bubble: #262c46;
+  --danger: #f16a6e;
+  --ok: #2bbfa8;
+  --warn: #e8b04b;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.7);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.7);
 }
 
 * {
@@ -1235,7 +1238,7 @@ body {
   font-size: calc(1rem * 12.5 / 14);
 }
 
-/* ---------------- 输入框里的技能入口（🧩 图标 + 点击展开卡片） ---------------- */
+/* ---------------- 输入框里的技能入口（拼图图标 + 点击展开卡片） ---------------- */
 .skill-picker {
   position: relative;
   display: flex;
@@ -2989,4 +2992,184 @@ html[data-fs='large'] {
   .func-panel {
     display: none;
   }
+}
+
+/* ============================================================
+   DeepSeek 蓝白风 · 视觉升级覆盖层
+   统一图标对齐、圆角、选中态、气泡、按钮等（图标尺寸由 JSX 的 size 属性控制）
+   ============================================================ */
+
+/* ---- 图标容器对齐 ---- */
+.func-icon,
+.page-icon,
+.doc-ico,
+.search-ico,
+.session-ico,
+.ph-ico,
+.todo-empty-ico,
+.bell-empty-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.session-ico {
+  color: var(--ink-dim);
+  flex-shrink: 0;
+}
+.session-item.active .session-ico {
+  color: var(--brand);
+}
+.func-icon {
+  color: var(--ink-soft);
+}
+.func-item.active .func-icon {
+  color: var(--brand);
+}
+.page-icon {
+  color: var(--brand);
+}
+.doc-ico {
+  color: var(--brand);
+}
+.ph-ico {
+  color: var(--brand);
+}
+.chat-placeholder .ph-ico {
+  opacity: 1;
+}
+.todo-empty-ico {
+  color: var(--brand);
+  background: var(--brand-tint);
+  border-color: transparent;
+}
+.bell-empty-ico {
+  color: var(--brand);
+  opacity: 1;
+}
+.func-arrow {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ---- 图标 + 文字按钮：水平对齐 ---- */
+.topbar-btn,
+.msg-bar-btn,
+.doc-btn,
+.skill-pop-manage,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+/* ---- 纯图标小按钮：居中 ---- */
+.session-edit,
+.session-del,
+.todo-del,
+.chip-del,
+.search-clear,
+.skill-actions button,
+.doc-btn.close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.skill-pop-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- 品牌元素 ---- */
+.brand-logo {
+  background: var(--brand);
+  color: #fff;
+  border-color: transparent;
+}
+.new-chat {
+  background: var(--brand-tint);
+  color: var(--brand);
+  border-color: transparent;
+  font-weight: 500;
+}
+.new-chat:hover {
+  background: var(--panel-3);
+  color: var(--brand);
+}
+.new-chat .plus {
+  display: inline-flex;
+}
+
+/* 会话项：圆角 pill，激活态 = 品牌浅底 + 品牌字 */
+.session-item {
+  border-radius: 10px;
+}
+.session-item.active {
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-weight: 500;
+}
+
+/* 功能面板激活态 */
+.func-item.active {
+  background: var(--brand-tint);
+  border-color: transparent;
+}
+.func-item.active .func-name {
+  color: var(--brand);
+}
+
+/* 用户气泡：右下角小尾巴，更圆润 */
+.bubble-user {
+  border-radius: 14px 14px 4px 14px;
+}
+
+/* AI 头像：品牌圆形 */
+.avatar {
+  background: var(--brand);
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+}
+
+/* 输入外壳：更圆 + 柔和聚焦环 */
+.composer-box {
+  border-radius: 14px;
+}
+.composer-box:focus-within {
+  box-shadow: 0 0 0 3px var(--brand-tint);
+}
+
+/* 附件 / 技能按钮圆角 */
+.attach-btn,
+.skill-picker-btn {
+  border-radius: 9px;
+}
+
+/* 页面标题字重 */
+.page-head h2 {
+  font-weight: 500;
+}
+
+/* 加载中的旋转图标 */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+/* 拖拽手柄 / 导入菜单项图标对齐 */
+.func-drag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.import-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }

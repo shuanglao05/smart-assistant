@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { ArrowLeft } from 'lucide-react'
 
 /** 功能页统一外壳：标题 + 返回对话 */
 export default function PageShell({
@@ -8,7 +9,7 @@ export default function PageShell({
   actions,
   children,
 }: {
-  icon: string
+  icon: ReactNode
   title: string
   actions?: ReactNode
   children: ReactNode
@@ -24,7 +25,8 @@ export default function PageShell({
         <div className="page-head-actions">
           {actions}
           <button className="btn" onClick={() => navigate('/')} title="回到对话">
-            ← 返回对话
+            <ArrowLeft size={15} />
+            返回对话
           </button>
         </div>
       </div>

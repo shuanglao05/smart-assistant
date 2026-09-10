@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { FileText, FolderOpen, Pencil, Plus, Upload, X } from 'lucide-react'
 import { skillsApi, sessionApi } from '../api'
 import type { Skill } from '../types'
 
@@ -152,7 +153,7 @@ export default function SkillsPanel({
   return (
     <div className="skills-tool">
       <div className="skills-tool-bar">
-        <span className="skills-sub">勾选=当前会话启用；「使用」=填入输入框；⇪ 可导入 .md 或文件夹</span>
+        <span className="skills-sub">勾选=当前会话启用；「使用」=填入输入框；「导入」可导入 .md 或文件夹</span>
         <div className="sec-head-actions">
           <div className="skills-import">
             <button
@@ -160,7 +161,7 @@ export default function SkillsPanel({
               onClick={() => setShowImport((v) => !v)}
               title="导入技能（.md 文件 / 文件夹）"
             >
-              ⇪
+              <Upload size={14} />
             </button>
             {showImport && (
               <div className="import-menu">
@@ -170,7 +171,7 @@ export default function SkillsPanel({
                     fileRef.current?.click()
                   }}
                 >
-                  📄 导入 .md 文件
+                  <FileText size={16} /> 导入 .md 文件
                 </button>
                 <button
                   onClick={() => {
@@ -178,13 +179,13 @@ export default function SkillsPanel({
                     folderRef.current?.click()
                   }}
                 >
-                  📂 导入技能文件夹
+                  <FolderOpen size={16} /> 导入技能文件夹
                 </button>
               </div>
             )}
           </div>
           <button className="skills-add" onClick={openCreate} title="新建技能">
-            ＋
+            <Plus size={15} />
           </button>
         </div>
       </div>
@@ -193,7 +194,7 @@ export default function SkillsPanel({
         {skills.length === 0 ? (
           <div className="skills-empty">
             <p>还没有技能</p>
-            <span>点 ＋ 新建，或点 ⇪ 导入 .md / 文件夹技能</span>
+            <span>点「＋」新建，或点「导入」导入 .md / 文件夹技能</span>
           </div>
         ) : (
           skills.map((s) => (
@@ -218,10 +219,10 @@ export default function SkillsPanel({
                     使用
                   </button>
                   <button className="skill-edit" onClick={() => openEdit(s)} title="编辑">
-                    ✎
+                    <Pencil size={12} />
                   </button>
                   <button className="skill-del" onClick={() => remove(s.id)} title="删除">
-                    ×
+                    <X size={14} />
                   </button>
                 </div>
               </div>

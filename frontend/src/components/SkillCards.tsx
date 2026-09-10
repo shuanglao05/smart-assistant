@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Check, Puzzle, Settings } from 'lucide-react'
 import { skillsApi, sessionApi } from '../api'
 import type { Skill } from '../types'
 
 /**
- * 输入框里的技能入口：平时只占一个 🧩 图标（角标显示已启用数量），
+ * 输入框里的技能入口：平时只占一个拼图图标（角标显示已启用数量），
  * 点击才弹出技能卡片面板供勾选；再点图标 / 点面板外 / Esc 收起。
  * 勾选状态存在当前会话的 active_skill_ids 上（后端随会话持久化）。
  */
@@ -73,7 +74,7 @@ export default function SkillCards({
         title="技能（点击展开勾选）"
         aria-label="技能"
       >
-        🧩
+        <Puzzle size={16} />
         {activeCount > 0 && <span className="skill-badge">{activeCount}</span>}
       </button>
 
@@ -101,7 +102,7 @@ export default function SkillCards({
                     onClick={() => toggle(s.id)}
                     title={s.description || s.name}
                   >
-                    <span className="skill-pop-check">{on ? '✓' : ''}</span>
+                    <span className="skill-pop-check">{on ? <Check size={11} /> : ''}</span>
                     <span className="skill-pop-body">
                       <span className="skill-pop-name">{s.name}</span>
                       {s.description && <span className="skill-pop-desc">{s.description}</span>}
@@ -119,7 +120,7 @@ export default function SkillCards({
               navigate('/skills')
             }}
           >
-            ⚙ 管理技能
+            <Settings size={13} /> 管理技能
           </button>
         </div>
       )}

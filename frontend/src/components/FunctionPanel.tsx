@@ -1,14 +1,26 @@
+import type { ReactNode } from 'react'
 import { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import {
+  CalendarDays,
+  ChevronRight,
+  CloudSun,
+  GripVertical,
+  ListChecks,
+  MessageSquare,
+  Puzzle,
+  RotateCcw,
+  Timer,
+} from 'lucide-react'
 
 /** 右侧功能入口：点击跳转到独立页面（不再是原地展开面板） */
-const FUNCS: { path: string; icon: string; name: string; desc: string }[] = [
-  { path: '/', icon: '💬', name: '对话', desc: 'AI 聊天助手' },
-  { path: '/weather', icon: '🌤', name: '天气', desc: '实况与未来 3 天' },
-  { path: '/skills', icon: '🧩', name: '技能', desc: '技能库与人设' },
-  { path: '/todos', icon: '✅', name: '待办', desc: '待办事项管理' },
-  { path: '/timer', icon: '⏱', name: '计时器', desc: '倒计时 / 秒表' },
-  { path: '/calendar', icon: '📅', name: '日历', desc: '月视图与备忘' },
+const FUNCS: { path: string; icon: ReactNode; name: string; desc: string }[] = [
+  { path: '/', icon: <MessageSquare size={18} />, name: '对话', desc: 'AI 聊天助手' },
+  { path: '/weather', icon: <CloudSun size={18} />, name: '天气', desc: '实况与未来 3 天' },
+  { path: '/skills', icon: <Puzzle size={18} />, name: '技能', desc: '技能库与人设' },
+  { path: '/todos', icon: <ListChecks size={18} />, name: '待办', desc: '待办事项管理' },
+  { path: '/timer', icon: <Timer size={18} />, name: '计时器', desc: '倒计时 / 秒表' },
+  { path: '/calendar', icon: <CalendarDays size={18} />, name: '日历', desc: '月视图与备忘' },
 ]
 
 const ORDER_KEY = 'funcOrder'
@@ -67,7 +79,8 @@ export default function FunctionPanel() {
           title="恢复默认顺序"
           disabled={order.join() === FUNCS.map((f) => f.path).join()}
         >
-          ↺ 重置
+          <RotateCcw size={12} />
+          重置
         </button>
       </div>
       <div className="func-list">
@@ -102,14 +115,16 @@ export default function FunctionPanel() {
               onClick={() => navigate(p)}
             >
               <span className="func-drag" title="拖拽调整顺序" aria-hidden>
-                ⠿
+                <GripVertical size={14} />
               </span>
               <span className="func-icon">{f.icon}</span>
               <span className="func-text">
                 <span className="func-name">{f.name}</span>
                 <span className="func-desc">{f.desc}</span>
               </span>
-              <span className="func-arrow">›</span>
+              <span className="func-arrow">
+                <ChevronRight size={16} />
+              </span>
             </button>
           )
         })}

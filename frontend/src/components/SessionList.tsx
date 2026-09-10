@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ChevronsLeft, ChevronsRight, MessageSquare, Pencil, Plus, Search, X } from 'lucide-react'
 import { searchApi } from '../api'
 import type { SearchHit, Session, UserProfile } from '../types'
 
@@ -98,7 +99,7 @@ export default function SessionList({
               </div>
             </div>
             <button className="sidebar-toggle" onClick={onToggleSidebar} title="收起侧边栏">
-              ≪
+              <ChevronsLeft size={15} />
             </button>
           </>
         ) : (
@@ -110,7 +111,7 @@ export default function SessionList({
               {avatarNode}
             </div>
             <button className="sidebar-toggle" onClick={onToggleSidebar} title="展开侧边栏">
-              ≫
+              <ChevronsRight size={15} />
             </button>
           </>
         )}
@@ -119,12 +120,12 @@ export default function SessionList({
       {sidebarOpen && (
         <>
           <button className="btn new-chat" onClick={onCreate}>
-            <span className="plus">＋</span> 新建会话
+            <Plus size={14} /> 新建会话
           </button>
 
           <div className="search-area">
             <div className="search-row">
-              <span className="search-ico">⌕</span>
+              <span className="search-ico"><Search size={13} /></span>
               <input
                 className="sidebar-search"
                 placeholder="搜索全部历史…"
@@ -146,7 +147,7 @@ export default function SessionList({
                   }}
                   title="清空搜索"
                 >
-                  ×
+                  <X size={14} />
                 </button>
               )}
             </div>
@@ -181,7 +182,7 @@ export default function SessionList({
                 onClick={() => onSelect(s.id)}
                 onDoubleClick={() => startRename(s)}
               >
-                <span className="dot" />
+                <MessageSquare size={14} className="session-ico" />
                 {editingId === s.id ? (
                   <input
                     className="rename-input"
@@ -208,7 +209,7 @@ export default function SessionList({
                     startRename(s)
                   }}
                 >
-                  ✎
+                  <Pencil size={13} />
                 </button>
                 <button
                   className="session-del"
@@ -218,7 +219,7 @@ export default function SessionList({
                     if (confirm('删除该会话及其消息？')) onDelete(s.id)
                   }}
                 >
-                  ×
+                  <X size={14} />
                 </button>
               </div>
             ))}

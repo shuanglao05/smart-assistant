@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { CalendarDays } from 'lucide-react'
 import PageShell from '../components/PageShell'
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日']
@@ -79,7 +80,7 @@ export default function CalendarPage() {
 
   return (
     <PageShell
-      icon="📅"
+      icon={<CalendarDays size={18} />}
       title="日历"
       actions={
         <div className="cal-nav">

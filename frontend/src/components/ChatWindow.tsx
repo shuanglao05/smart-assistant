@@ -1,4 +1,19 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
+import {
+  ArrowUp,
+  Check,
+  Copy,
+  Download,
+  FileText,
+  Loader2,
+  MessageSquare,
+  PanelRight,
+  Paperclip,
+  RefreshCw,
+  Settings,
+  Square,
+  X,
+} from 'lucide-react'
 import { filesApi, sessionApi } from '../api'
 import type { FileInfo, LlmConfigPayload, LlmOption, Message, UserProfile } from '../types'
 import MessageBubble from './MessageBubble'
@@ -31,11 +46,19 @@ function MsgBar({
   return (
     <div className="msg-bar">
       <button className="msg-bar-btn" onClick={copy} title="复制本条回复">
-        {copied ? '✓ 已复制' : '复制'}
+        {copied ? (
+          <>
+            <Check size={12} /> 已复制
+          </>
+        ) : (
+          <>
+            <Copy size={12} /> 复制
+          </>
+        )}
       </button>
       {canRegen && (
         <button className="msg-bar-btn regen" onClick={onRegen} title="重新生成本条回答">
-          ⟳ 重新生成
+          <RefreshCw size={12} /> 重新生成
         </button>
       )}
     </div>
@@ -118,7 +141,7 @@ export default function ChatWindow({
     if (messages.length === 0) return
     const md: string[] = [`# ${title || '对话记录'}`, '', `_导出时间：${new Date().toLocaleString()}_`, '']
     for (const m of messages) {
-      md.push(m.role === 'user' ? '### 🧑 我' : '### 🤖 AI')
+      md.push(m.role === 'user' ? '### 我' : '### AI')
       md.push('')
       md.push(m.content)
       md.push('')
@@ -346,6 +369,7 @@ export default function ChatWindow({
             disabled={messages.length === 0}
             title="导出当前对话为 Markdown 文件"
           >
+            <Download size={14} />
             导出
           </button>
           <button
@@ -353,6 +377,7 @@ export default function ChatWindow({
             onClick={onTogglePanel}
             title={panelOpen ? '收起右侧面板' : '展开右侧面板'}
           >
+            <PanelRight size={14} />
             {panelOpen ? '收起面板' : '展开面板'}
           </button>
           <button
@@ -361,7 +386,7 @@ export default function ChatWindow({
             title="设置"
             aria-label="设置"
           >
-            ⚙
+            <Settings size={16} />
           </button>
         </div>
         <CloudConnectModal
@@ -374,7 +399,9 @@ export default function ChatWindow({
       <div className="message-list" onScroll={onListScroll}>
         {messages.length === 0 && !loading && (
           <div className="chat-placeholder">
-            <div className="ph-ico">💬</div>
+            <div className="ph-ico">
+              <MessageSquare size={30} />
+            </div>
             <p>开聊吧</p>
             <span>试试：「帮我计算 12*15」或「记一下明天交报告」</span>
           </div>
@@ -405,7 +432,7 @@ export default function ChatWindow({
                       title={`查看 ${f.filename}`}
                       onClick={() => setViewing({ id: f.id, filename: f.filename })}
                     >
-                      📄 {f.filename}
+                      <FileText size={12} /> {f.filename}
                     </button>
                   ))}
                 </div>
@@ -429,13 +456,13 @@ export default function ChatWindow({
           <div className="attach-chips">
             {attaches.map((a) => (
               <span key={a.id} className="chip">
-                📄 {a.filename}
+                <FileText size={12} /> {a.filename}
                 <button
                   className="chip-del"
                   onClick={() => setAttaches((prev) => prev.filter((x) => x.id !== a.id))}
                   disabled={loading}
                 >
-                  ×
+                  <X size={12} />
                 </button>
               </span>
             ))}
@@ -470,7 +497,7 @@ export default function ChatWindow({
                 disabled={loading || attaching}
                 title="上传附件（txt/md/csv/json/pdf…）让助手阅读后回答"
               >
-                {attaching ? '⏳' : '📎'}
+                {attaching ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
               </button>
               <SkillCards
                 sessionId={sessionId}
@@ -481,11 +508,11 @@ export default function ChatWindow({
             <div className="composer-tools-right">
               {loading ? (
                 <button className="btn primary send stop" onClick={stop} title="停止生成">
-                  ■ 停止
+                  <Square size={13} /> 停止
                 </button>
               ) : (
                 <button className="btn primary send" onClick={send} disabled={!input.trim()}>
-                  发送
+                  <ArrowUp size={15} /> 发送
                 </button>
               )}
             </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Bell, BellOff } from 'lucide-react'
 import { notificationApi } from '../api'
 import type { NotificationItem } from '../types'
 
@@ -60,7 +61,7 @@ export default function NotificationBell() {
   }
 
   const sendTest = async () => {
-    await notificationApi.create('测试通知 ✓', '通知中心工作正常。你也可以对 AI 说「提醒我…」让它发提醒。', 'remind')
+    await notificationApi.create('测试通知', '通知中心工作正常。你也可以对 AI 说「提醒我…」让它发提醒。', 'remind')
     await loadList()
     loadUnread()
   }
@@ -72,7 +73,8 @@ export default function NotificationBell() {
         onClick={() => setOpen((v) => !v)}
         title="通知中心"
       >
-        🔔{unread > 0 && <span className="bell-badge">{unread > 99 ? '99+' : unread}</span>}
+        <Bell size={16} />
+        {unread > 0 && <span className="bell-badge">{unread > 99 ? '99+' : unread}</span>}
       </button>
 
       {open && (
@@ -96,7 +98,9 @@ export default function NotificationBell() {
           <div className="bell-list">
             {items.length === 0 ? (
               <div className="bell-empty">
-                <div className="bell-empty-ico">🔕</div>
+                <div className="bell-empty-ico">
+                  <BellOff size={26} />
+                </div>
                 <p>暂无通知</p>
                 <span>试试对 AI 说「提醒我 30 分钟后喝水」</span>
               </div>

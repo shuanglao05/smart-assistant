@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { notificationApi } from '../api'
+import { Timer } from 'lucide-react'
 import PageShell from '../components/PageShell'
 
 type Tab = 'countdown' | 'stopwatch'
@@ -120,7 +121,7 @@ export default function TimerPage() {
 
   return (
     <PageShell
-      icon="⏱"
+      icon={<Timer size={18} />}
       title="计时器"
       actions={
         <div className="seg">

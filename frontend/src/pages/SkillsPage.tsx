@@ -1,3 +1,4 @@
+import { Puzzle } from 'lucide-react'
 import PageShell from '../components/PageShell'
 import SkillsPanel from '../components/SkillsPanel'
 
@@ -13,7 +14,7 @@ export default function SkillsPage({
   onSessionUpdate: () => void
 }) {
   return (
-    <PageShell icon="🧩" title="技能库">
+    <PageShell icon={<Puzzle size={18} />} title="技能库">
       <div className="page-card">
         <SkillsPanel
           sessionId={sessionId}

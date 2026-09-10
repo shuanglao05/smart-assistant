@@ -72,7 +72,7 @@ const translations: Record<Lang, Record<string, string>> = {
     'right.weather.query': '查询',
     'right.skills.sub': '勾选=当前会话启用；「使用」=填入输入框',
     'right.skills.empty': '还没有技能',
-    'right.skills.emptyTip': '点 ＋ 新建，或点 ⇪ 导入 .md / 文件夹技能',
+    'right.skills.emptyTip': '点「＋」新建，或点「导入」导入 .md / 文件夹技能',
     'right.skills.import': '导入',
     'right.skills.importMd': '导入 .md 文件',
     'right.skills.importFolder': '导入技能文件夹',

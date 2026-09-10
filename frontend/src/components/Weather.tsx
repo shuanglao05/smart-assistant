@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { Search } from 'lucide-react'
 import { weatherApi } from '../api'
 
 type Mode = 'now' | 'forecast'
@@ -91,7 +92,7 @@ export default function Weather() {
           onKeyDown={(e) => e.key === 'Enter' && query(mode)}
         />
         <button className="btn-icon" onClick={() => query(mode)} disabled={loading} title="查询">
-          ⌕
+          <Search size={17} />
         </button>
       </div>
 
