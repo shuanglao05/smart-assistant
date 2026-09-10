@@ -77,6 +77,7 @@ class SessionOut(BaseModel):
     provider: str = "ollama"
     model: str = ""
     active_skill_ids: list[int] = []
+    active_kb_ids: list[int] = []
     created_at: datetime
     updated_at: datetime
 
@@ -86,6 +87,7 @@ class SessionUpdate(BaseModel):
     provider: str | None = None
     model: str | None = None
     active_skill_ids: list[int] | None = None
+    active_kb_ids: list[int] | None = None
 
 
 class MessageOut(BaseModel):
@@ -94,6 +96,9 @@ class MessageOut(BaseModel):
     created_at: datetime
     # 用户消息引用的文档（id + 文件名 + 大小），由 messages 接口补全；助手消息恒为空
     ref_files: list["RefFile"] = []
+    # 产生这条回答所用的模型（仅助手消息有；前端在回答下方标注）
+    provider: str | None = None
+    model: str | None = None
 
 
 class RefFile(BaseModel):
@@ -126,6 +131,58 @@ class FileDetail(FileOut):
     """文档详情：在 FileOut 基础上带上抽取的正文，供前端在右侧面板中查看。"""
 
     content: str | None = None
+
+
+class KbDocument(BaseModel):
+    """某个知识库中的一份文档及其索引状态。"""
+
+    id: int
+    filename: str
+    size: int
+    created_at: datetime | None = None  # 容错：历史数据可能为空
+    chunks: int = 0  # 已建立的索引片段数（0 表示尚未索引）
+    collection_id: int | None = None
+
+
+class KbCollectionOut(BaseModel):
+    """知识库（集合）及其汇总统计。"""
+
+    id: int
+    name: str
+    created_at: datetime | None = None  # 容错：历史数据可能为空
+    files: int = 0  # 文档数
+    chunks: int = 0  # 片段数
+
+
+class KbCollectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class KbCollectionUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class KbChunkPreview(BaseModel):
+    """知识库图谱用：单个片段的序号与开头预览。"""
+
+    index: int
+    preview: str
+
+
+class KbGraphDoc(BaseModel):
+    """图谱中的一个文档节点（含若干片段预览）。"""
+
+    id: int
+    filename: str
+    chunks: int  # 该文档的片段总数
+    previews: list[KbChunkPreview] = []  # 预览片段（可能少于总数）
+
+
+class KbGraph(BaseModel):
+    """知识库关系图数据：库 → 文档 → 片段。"""
+
+    collection: KbCollectionOut
+    documents: list[KbGraphDoc] = []
 
 
 class SearchHit(BaseModel):

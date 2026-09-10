@@ -22,6 +22,7 @@ class LlmConfigRequest(BaseModel):
     cloud_api_key: str
     cloud_base_url: str | None = None
     cloud_model: str | None = None
+    cloud_models: list[str] | None = None  # 可选：本次要保存的模型清单
 
 
 def _env_path() -> Path:
@@ -68,6 +69,16 @@ def _test_cloud_llm() -> None:
         raise ValueError(f"连接云端模型失败：{e}") from e
 
 
+@router.get("")
+def get_cloud_config(_current_user=Depends(get_current_user)):
+    """返回当前云端配置（不含 Key），供接入弹窗预填，避免保存时把 Base URL 冲掉。"""
+    return {
+        "cloud_base_url": config.CLOUD_BASE_URL or "",
+        "cloud_model": config.CLOUD_MODEL,
+        "cloud_models": list(config.CLOUD_MODELS),
+    }
+
+
 @router.post("")
 def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current_user)):
     """保存云端大模型配置：先测连，通过后即时生效 + 持久化到 .env。"""
@@ -75,20 +86,36 @@ def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current
         raise HTTPException(400, "API Key 不能为空")
 
     # 记录旧值，测试失败时回滚，保证当前可用配置不被破坏
-    old = (config.CLOUD_API_KEY, config.CLOUD_BASE_URL, config.CLOUD_MODEL)
+    old = (
+        config.CLOUD_API_KEY,
+        config.CLOUD_BASE_URL,
+        config.CLOUD_MODEL,
+        list(config.CLOUD_MODELS),
+    )
 
-    # 1) 按候选值更新内存中的 config 模块变量（Base URL 留空 -> 默认 OpenAI 官方）
+    # 1) 按候选值更新内存中的 config 模块变量
     config.CLOUD_API_KEY = payload.cloud_api_key.strip()
-    config.CLOUD_BASE_URL = (
-        payload.cloud_base_url.strip() if payload.cloud_base_url else ""
-    ) or DEFAULT_OPENAI_BASE_URL
+    # Base URL：填了就用；留空则「保持当前不变」（仅当当前也没配过时才回落 OpenAI 官方）
+    if payload.cloud_base_url and payload.cloud_base_url.strip():
+        config.CLOUD_BASE_URL = payload.cloud_base_url.strip()
+    elif not config.CLOUD_BASE_URL:
+        config.CLOUD_BASE_URL = DEFAULT_OPENAI_BASE_URL
     config.CLOUD_MODEL = (payload.cloud_model.strip() if payload.cloud_model else config.CLOUD_MODEL)
+    if payload.cloud_models is not None:
+        models = [m.strip() for m in payload.cloud_models if m and m.strip()]
+        if models:
+            config.CLOUD_MODELS = models
 
     # 2) 真实连通性测试：失败则回滚并把真实原因返回给前端
     try:
         _test_cloud_llm()
     except ValueError as e:
-        config.CLOUD_API_KEY, config.CLOUD_BASE_URL, config.CLOUD_MODEL = old
+        (
+            config.CLOUD_API_KEY,
+            config.CLOUD_BASE_URL,
+            config.CLOUD_MODEL,
+            config.CLOUD_MODELS,
+        ) = old
         raise HTTPException(400, str(e))
 
     # 3) 持久化到 .env
@@ -97,7 +124,56 @@ def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current
             "CLOUD_API_KEY": config.CLOUD_API_KEY,
             "CLOUD_BASE_URL": config.CLOUD_BASE_URL or "",
             "CLOUD_MODEL": config.CLOUD_MODEL,
+            "CLOUD_MODELS": ",".join(config.CLOUD_MODELS),
         }
     )
 
+    return config.llm_options()
+
+
+@router.get("/models")
+def list_remote_models(_current_user=Depends(get_current_user)):
+    """尝试调用云端 OpenAI 兼容的 GET /models 拉取可用模型列表。
+
+    部分平台未开放该接口；失败时前端回退到手动清单即可。
+    """
+    if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
+        raise HTTPException(400, "请先配置云端 Key 与 Base URL")
+    import requests
+
+    url = config.CLOUD_BASE_URL.rstrip("/") + "/models"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {config.CLOUD_API_KEY}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(400, f"该平台未提供 /models 列表接口或调用失败：{e}")
+
+    items = data.get("data") if isinstance(data, dict) else None
+    models: list[str] = []
+    if isinstance(items, list):
+        models = [
+            str(it.get("id")) for it in items if isinstance(it, dict) and it.get("id")
+        ]
+    if not models:
+        raise HTTPException(400, "接口未返回模型列表（该平台可能不支持 /models）")
+    return {"models": models}
+
+
+class ModelsUpdate(BaseModel):
+    cloud_models: list[str]
+
+
+@router.post("/models")
+def save_models(payload: ModelsUpdate, _current_user=Depends(get_current_user)):
+    """仅更新云端可选模型清单（不重测 Key），写入内存与 .env。"""
+    models = [m.strip() for m in payload.cloud_models if m and m.strip()]
+    if not models:
+        raise HTTPException(400, "模型清单不能为空")
+    config.CLOUD_MODELS = models
+    _update_env_file({"CLOUD_MODELS": ",".join(models)})
     return config.llm_options()

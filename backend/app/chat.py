@@ -2,28 +2,115 @@
 
 支持：
 - regenerate=true：不新增用户消息，删掉最后一个问题之后的 assistant 回答，重新生成；
-- file_ids=[...]：把该用户已上传附件（files 表）的正文拼进给模型的消息（不落库，一问一答注入）。
+- file_ids=[...]：把该用户已上传附件（files 表）注入本次提问（不落库，一问一答）：
+    · 文本/PDF  → 抽出正文拼到问题前面（_attachment_context）
+    · 图片      → 转成多模态消息块，交给视觉模型直接看图（_image_blocks，此时不走 Agent）
+- 流式事件类型：{"token":...} 正文增量 / {"reasoning":...} 思考过程增量 /
+  {"sources":[...]} 知识库命中来源 / {"done":true, provider, model} 结束（带回本条用的模型）；
+- 思考过程：推理模型思考内容若混在正文的  thinking…<｜end▁of▁thinking｜> 里，由 _ThinkSplitter 流式剥离，
+  与正文分开推送，避免污染回答。
 """
 
+import base64
 import json
+import mimetypes
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from sqlalchemy.orm import Session
 
-from app.agent_manager import get_agent_for_conversation
+from app.agent_manager import build_llm, get_agent_for_conversation
 from app.database import get_db
 from app.deps import get_current_user
+from app.files import IMAGE_EXTS, UPLOAD_ROOT
 from app.models import Conversation, FileItem, Message
 from app.schemas import ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
+# 从知识库工具返回文本里提取来源文件名（工具按「【文件名】正文」格式拼装）
+_SRC_RE = re.compile(r"【(.+?)】")
 
-def _attachment_context(db: Session, user_id: int, file_ids: list[int] | None) -> str:
-    """把附件正文拼成注入文本；文件必须属于当前用户。"""
+
+def _extract_sources(text: str) -> list[str]:
+    """从工具结果里抽出命中的来源文件名（去重，保持出现顺序）。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in _SRC_RE.findall(text or ""):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+_THINK_OPEN = " thinking"
+_THINK_CLOSE = "<｜end▁of▁thinking｜>"
+
+
+class _ThinkSplitter:
+    """把流式正文里的  thinking...<｜end▁of▁thinking｜> 拆成「思考」与「回答」两路。
+
+    部分推理模型（如本地 qwen3 开启 think）会把思考过程用  thinking 标签混在正文里，
+    这里做流式拆分，好让前端把思考过程单独展示。标签可能跨 chunk，故保留尾巴缓冲。
+    """
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, text: str) -> tuple[str, str]:
+        """喂入一段增量文本，返回 (思考增量, 回答增量)。"""
+        self._buf += text
+        think_parts: list[str] = []
+        answer_parts: list[str] = []
+        while self._buf:
+            if not self._in_think:
+                i = self._buf.find(_THINK_OPEN)
+                if i >= 0:
+                    answer_parts.append(self._buf[:i])
+                    self._buf = self._buf[i + len(_THINK_OPEN):]
+                    self._in_think = True
+                    continue
+                # 末尾可能是半个开标签，先留着不输出
+                keep = len(_THINK_OPEN) - 1
+                if len(self._buf) > keep:
+                    answer_parts.append(self._buf[:-keep])
+                    self._buf = self._buf[-keep:]
+                break
+            j = self._buf.find(_THINK_CLOSE)
+            if j >= 0:
+                think_parts.append(self._buf[:j])
+                self._buf = self._buf[j + len(_THINK_CLOSE):]
+                self._in_think = False
+                continue
+            keep = len(_THINK_CLOSE) - 1
+            if len(self._buf) > keep:
+                think_parts.append(self._buf[:-keep])
+                self._buf = self._buf[-keep:]
+            break
+        return "".join(think_parts), "".join(answer_parts)
+
+    def flush(self) -> tuple[str, str]:
+        """流结束：把缓冲里剩余的内容吐出（仍处于思考态则算思考）。"""
+        rest, self._buf = self._buf, ""
+        return (rest, "") if self._in_think else ("", rest)
+
+
+def _attachment_context(
+    db: Session,
+    user_id: int,
+    file_ids: list[int] | None,
+    exclude_ids: set[int] | None = None,
+) -> str:
+    """把附件正文拼成注入文本；文件必须属于当前用户。
+
+    图片附件走多模态消息（见 _image_blocks），这里用 exclude_ids 跳过，
+    避免把图片拼成"无内容可读取"的占位文案。
+    """
     if not file_ids:
         return ""
     files = (
@@ -33,6 +120,8 @@ def _attachment_context(db: Session, user_id: int, file_ids: list[int] | None) -
     )
     blocks = []
     for f in files:
+        if exclude_ids and f.id in exclude_ids:
+            continue
         text = (f.content or "").strip()
         if text:
             blocks.append(f"[附件：{f.filename}]\n{text}")
@@ -41,6 +130,39 @@ def _attachment_context(db: Session, user_id: int, file_ids: list[int] | None) -
     if not blocks:
         return ""
     return "\n\n".join(blocks) + "\n\n"
+
+
+def _image_blocks(
+    db: Session, user_id: int, file_ids: list[int] | None
+) -> tuple[list[dict], set[int]]:
+    """把用户上传的图片附件转成多模态 content blocks（data URL）。
+
+    返回 (blocks, image_ids)：blocks 直接塞进 HumanMessage 的 content；
+    image_ids 用于在文本注入里排除这些图片。文件必须属于当前用户。
+    """
+    if not file_ids:
+        return [], set()
+    files = (
+        db.query(FileItem)
+        .filter(FileItem.id.in_(file_ids), FileItem.user_id == user_id)
+        .all()
+    )
+    blocks: list[dict] = []
+    ids: set[int] = set()
+    for f in files:
+        if Path(f.stored_path).suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            data = (UPLOAD_ROOT.parent / f.stored_path).read_bytes()
+        except Exception:
+            continue
+        mime = mimetypes.guess_type(f.filename)[0] or "image/png"
+        b64 = base64.b64encode(data).decode()
+        blocks.append(
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        )
+        ids.add(f.id)
+    return blocks, ids
 
 
 def _prepare_conversation(
@@ -104,29 +226,53 @@ def chat(
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    context = _attachment_context(db, current_user.id, payload.file_ids)
+    image_blocks, image_ids = _image_blocks(db, current_user.id, payload.file_ids)
+    context = _attachment_context(db, current_user.id, payload.file_ids, exclude_ids=image_ids)
     agent_input = f"{context}{question}" if context else question
 
-    # 拿到这个会话对应的 ReAct 智能体（带 MemorySaver 记忆）
-    agent = get_agent_for_conversation(conv.id, current_user.id, provider=conv.provider, model=conv.model)
-    try:
-        # agent.invoke：一次性跑完整个"思考→调工具→再思考→回答"循环，返回最终结果。
-        #   {"messages": [("user", agent_input)]}  —— 这就是喂给模型的"用户消息"。
-        #   config 里的 thread_id 是 LangGraph 记忆的"身份证"：相同 thread_id 的多次调用
-        #   会共享同一段对话历史（MemorySaver 存的就是它），所以多轮对话能接得上。
-        #   这里用会话 id 当 thread_id，天然实现"每个会话各记各的"。
-        result = agent.invoke(
-            {"messages": [("user", agent_input)]},
-            config={"configurable": {"thread_id": str(conv.id)}},
-        )
-        # 结果里 messages 是完整消息链，最后一条就是模型的最终回答
-        reply = result["messages"][-1].content
-        if not reply:
-            reply = "（模型没有返回内容，请重试或检查 Ollama 服务状态）"
-    except Exception as e:
-        reply = f"出错了: {e}"
+    if image_blocks:
+        # 含图片：直接多模态调用（不走 Agent，避免"工具调用 + 视觉"不兼容）
+        try:
+            llm = build_llm(conv.provider, conv.model)
+            msg = HumanMessage(
+                content=[
+                    {"type": "text", "text": agent_input or "请描述这张图片的内容。"},
+                    *image_blocks,
+                ]
+            )
+            resp = llm.invoke([msg])
+            reply = resp.content if isinstance(resp.content, str) else str(resp.content)
+            if not reply:
+                reply = "（模型没有返回内容）"
+        except Exception as e:
+            reply = f"出错了: {e}"
+    else:
+        # 拿到这个会话对应的 ReAct 智能体（带 MemorySaver 记忆）
+        agent = get_agent_for_conversation(conv.id, current_user.id, provider=conv.provider, model=conv.model)
+        try:
+            # agent.invoke：一次性跑完整个"思考→调工具→再思考→回答"循环，返回最终结果。
+            #   config 里的 thread_id 是 LangGraph 记忆的"身份证"：相同 thread_id 的多次调用
+            #   会共享同一段对话历史（MemorySaver 存的就是它），所以多轮对话能接得上。
+            result = agent.invoke(
+                {"messages": [("user", agent_input)]},
+                config={"configurable": {"thread_id": str(conv.id)}},
+            )
+            # 结果里 messages 是完整消息链，最后一条就是模型的最终回答
+            reply = result["messages"][-1].content
+            if not reply:
+                reply = "（模型没有返回内容，请重试或检查 Ollama 服务状态）"
+        except Exception as e:
+            reply = f"出错了: {e}"
 
-    db.add(Message(conversation_id=conv.id, role="assistant", content=reply))
+    db.add(
+        Message(
+            conversation_id=conv.id,
+            role="assistant",
+            content=reply,
+            provider=conv.provider,
+            model=conv.model,
+        )
+    )
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -157,41 +303,98 @@ def chat_stream(
 
     # regenerate / 普通提问：在此阶段完成落库与校验（HTTPException 才能正确返回）
     question = _prepare_conversation(db, current_user.id, conv, payload)
-    context = _attachment_context(db, current_user.id, payload.file_ids)
+    image_blocks, image_ids = _image_blocks(db, current_user.id, payload.file_ids)
+    context = _attachment_context(db, current_user.id, payload.file_ids, exclude_ids=image_ids)
     agent_input = f"{context}{question}" if context else question
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    # 拿到这个会话对应的 ReAct 智能体（与上面非流式版本共用同一个记忆）
-    agent = get_agent_for_conversation(conv.id, current_user.id, provider=conv.provider, model=conv.model)
+    # 含图片时用多模态模型直连；否则用带记忆的 ReAct 智能体（与上面非流式版本共用记忆）
+    agent = (
+        None
+        if image_blocks
+        else get_agent_for_conversation(conv.id, current_user.id, provider=conv.provider, model=conv.model)
+    )
 
     def gen():
         """生成器函数：被 StreamingResponse 逐段取出，形成 SSE 流式推送。"""
         full: list[str] = []
+        splitter = _ThinkSplitter()
         try:
-            # agent.stream：和 invoke 一样跑完整循环，但不等全部结束，而是每产生一点
-            # 模型文本就 yield 出来，前端就能实现"打字机"逐字显示。
-            #   stream_mode="messages" 表示按"消息增量"为单位吐出；
-            #   同样的 thread_id 保证流式对话也接得上之前的历史。
-            for msg, _meta in agent.stream(
-                {"messages": [("user", agent_input)]},
-                config={"configurable": {"thread_id": str(conv.id)}},
-                stream_mode="messages",
-            ):
-                # 只把大模型的文本增量推给前端；工具调用阶段（非 AIMessageChunk）不干扰显示
-                # AIMessageChunk 是 LangChain 流式输出的"文本片段"类型
-                if isinstance(msg, AIMessageChunk) and isinstance(msg.content, str) and msg.content:
-                    full.append(msg.content)
-                    yield f"data: {json.dumps({'token': msg.content}, ensure_ascii=False)}\n\n"
+            if image_blocks:
+                # 多模态流式：把"问题 + 图片"直接交给视觉模型逐 token 输出
+                llm = build_llm(conv.provider, conv.model)
+                message = HumanMessage(
+                    content=[
+                        {"type": "text", "text": agent_input or "请描述这张图片的内容。"},
+                        *image_blocks,
+                    ]
+                )
+                for chunk in llm.stream([message]):
+                    if isinstance(chunk.content, str) and chunk.content:
+                        full.append(chunk.content)
+                        yield f"data: {json.dumps({'token': chunk.content}, ensure_ascii=False)}\n\n"
+            else:
+                # agent.stream：和 invoke 一样跑完整循环，但不等全部结束，而是每产生一点
+                # 模型文本就 yield 出来，前端就能实现"打字机"逐字显示。
+                #   stream_mode="messages" 表示按"消息增量"为单位吐出；
+                #   同样的 thread_id 保证流式对话也接得上之前的历史。
+                for msg, _meta in agent.stream(
+                    {"messages": [("user", agent_input)]},
+                    config={"configurable": {"thread_id": str(conv.id)}},
+                    stream_mode="messages",
+                ):
+                    if isinstance(msg, AIMessageChunk):
+                        # ① 结构化思考内容（部分云端推理模型：DeepSeek-R1 / Qwen 思考版等）
+                        ak = getattr(msg, "additional_kwargs", None)
+                        rc = None
+                        if isinstance(ak, dict):
+                            rc = ak.get("reasoning_content") or ak.get("reasoning")
+                        if isinstance(rc, str) and rc:
+                            yield f"data: {json.dumps({'reasoning': rc}, ensure_ascii=False)}\n\n"
+                        # ② 正文（本地 qwen3 开 think 时，思考会以  thinking 标签混在正文里）
+                        if isinstance(msg.content, str) and msg.content:
+                            think, answer = splitter.feed(msg.content)
+                            if think:
+                                yield f"data: {json.dumps({'reasoning': think}, ensure_ascii=False)}\n\n"
+                            if answer:
+                                full.append(answer)
+                                yield f"data: {json.dumps({'token': answer}, ensure_ascii=False)}\n\n"
+                    elif (
+                        isinstance(msg, ToolMessage)
+                        and getattr(msg, "name", None) == "search_knowledge_base"
+                    ):
+                        # 知识库检索工具执行完毕：把命中的来源文件名推给前端做「引用来源」标注
+                        sources = _extract_sources(
+                            msg.content if isinstance(msg.content, str) else ""
+                        )
+                        if sources:
+                            yield f"data: {json.dumps({'sources': sources}, ensure_ascii=False)}\n\n"
+                # 收尾：冲掉标签拆分器缓冲里的残留
+                think, answer = splitter.flush()
+                if think:
+                    yield f"data: {json.dumps({'reasoning': think}, ensure_ascii=False)}\n\n"
+                if answer:
+                    full.append(answer)
+                    yield f"data: {json.dumps({'token': answer}, ensure_ascii=False)}\n\n"
             reply = "".join(full) or "（模型没有返回内容）"
         except Exception as e:
             reply = f"出错了: {e}"
             yield f"data: {json.dumps({'token': reply}, ensure_ascii=False)}\n\n"
 
-        db.add(Message(conversation_id=conv.id, role="assistant", content=reply))
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                role="assistant",
+                content=reply,
+                provider=conv.provider,
+                model=conv.model,
+            )
+        )
         conv.updated_at = datetime.now(timezone.utc)
         db.commit()
-        yield f"data: {json.dumps({'done': True}, ensure_ascii=False)}\n\n"
+        # 结束事件顺带带上本次回答所用的模型，前端据此在回答下方标注
+        yield f"data: {json.dumps({'done': True, 'provider': conv.provider, 'model': conv.model}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         gen(),

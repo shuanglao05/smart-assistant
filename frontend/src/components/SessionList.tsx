@@ -119,7 +119,7 @@ export default function SessionList({
 
       {sidebarOpen && (
         <>
-          <button className="btn new-chat" onClick={onCreate}>
+          <button className="btn new-chat" onClick={onCreate} title="新建一个对话">
             <Plus size={14} /> 新建会话
           </button>
 
@@ -226,7 +226,7 @@ export default function SessionList({
           </div>
           )}
 
-          <button className="logout" onClick={onLogout}>
+          <button className="logout" onClick={onLogout} title="退出当前账号">
             退出登录
           </button>
         </>

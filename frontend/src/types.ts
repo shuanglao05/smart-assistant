@@ -4,6 +4,7 @@ export interface Session {
   provider?: string
   model?: string
   active_skill_ids?: number[]
+  active_kb_ids?: number[]
   created_at: string
   updated_at: string
 }
@@ -20,6 +21,7 @@ export interface LlmConfigPayload {
   cloud_api_key: string
   cloud_base_url?: string
   cloud_model?: string
+  cloud_models?: string[]
 }
 
 export interface Message {
@@ -28,6 +30,13 @@ export interface Message {
   created_at: string
   // 用户消息引用的文档（气泡上方展示，点击在右侧查看详情）
   ref_files?: { id: number; filename: string; size: number }[]
+  // 助手回答时命中的知识库来源文件名（回答下方展示）
+  sources?: string[]
+  // 推理模型的"思考过程"（有则单独展示，与正文分开）
+  reasoning?: string
+  // 产生这条回答所用的模型（助手消息才有；在回答下方标注）
+  provider?: string
+  model?: string
 }
 
 export interface FileDetail {
@@ -36,6 +45,40 @@ export interface FileDetail {
   size: number
   created_at: string
   content: string | null
+}
+
+export interface KbDocument {
+  id: number
+  filename: string
+  size: number
+  created_at: string
+  chunks: number
+  collection_id: number | null
+}
+
+export interface KbCollection {
+  id: number
+  name: string
+  created_at: string
+  files: number
+  chunks: number
+}
+
+export interface KbChunkPreview {
+  index: number
+  preview: string
+}
+
+export interface KbGraphDoc {
+  id: number
+  filename: string
+  chunks: number
+  previews: KbChunkPreview[]
+}
+
+export interface KbGraph {
+  collection: KbCollection
+  documents: KbGraphDoc[]
 }
 
 export interface Todo {

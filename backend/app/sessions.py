@@ -1,4 +1,11 @@
-"""会话 CRUD 路由：列表 / 新建 / 历史消息 / 删除。"""
+"""会话（Conversation）路由：列表 / 新建 / 历史消息 / 改名 / 删除 / 切换设定。
+
+- PATCH 可改：标题、provider+model（切换本会话用的大模型）、启用技能（active_skill_ids）、
+  参与检索的知识库（active_kb_ids）；
+- 拉取历史消息时把 Message.ref_file_ids 还原成 ref_files（附件 id + 文件名 + 大小），
+  并把每条助手回答的 provider/model 一并返回（前端在回答下方标注"这段是哪个模型答的"）；
+- 删除会话时同步清理该会话缓存的 Agent 与共享记忆里的历史（避免内存泄漏）。
+"""
 
 import json
 
@@ -6,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app import config
-from app.agent_manager import evict_agent
+from app.agent_manager import clear_conversation_memory, evict_agent
 from app.database import get_db
 from app.deps import get_current_user
 from app.models import Conversation, FileItem, Message
@@ -85,7 +92,14 @@ def get_messages(
                 )
                 ref_files = [RefFile(id=f.id, filename=f.filename, size=f.size) for f in files]
         result.append(
-            MessageOut(role=m.role, content=m.content, created_at=m.created_at, ref_files=ref_files)
+            MessageOut(
+                role=m.role,
+                content=m.content,
+                created_at=m.created_at,
+                ref_files=ref_files,
+                provider=m.provider,
+                model=m.model,
+            )
         )
     return result
 
@@ -114,6 +128,9 @@ def update_session(
     if payload.active_skill_ids is not None:
         conv.active_skill_ids = payload.active_skill_ids
         _evict_if_skills_changed(session_id)
+    if payload.active_kb_ids is not None:
+        conv.active_kb_ids = payload.active_kb_ids
+        evict_agent(session_id)  # 知识库选择变化：清缓存，下次按新库重建
     db.commit()
     db.refresh(conv)
     return conv
@@ -129,5 +146,6 @@ def delete_session(
     db.query(Message).filter(Message.conversation_id == session_id).delete()
     db.delete(conv)
     db.commit()
-    evict_agent(session_id)  # 同步清理 Agent 内存记忆
+    evict_agent(session_id)  # 清理该会话缓存的 Agent
+    clear_conversation_memory(session_id)  # 清掉共享记忆里该会话的历史，避免泄漏
     return {"status": "deleted"}

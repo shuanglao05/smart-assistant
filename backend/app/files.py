@@ -1,10 +1,19 @@
-"""文件上传：把 txt/md/csv/json/pdf 等附件存盘并在上传时抽取正文，供聊天注入上下文。"""
+"""文件上传：附件存盘 + 上传即建知识库索引，供问答与 RAG 检索使用。
+
+支持的类型：
+  文本类  .txt/.md/.markdown/.csv/.json/.log/.py/.js/.ts/.html（直接读取正文）
+  文档类  .pdf（抽取文字）
+  图片类  .png/.jpg/.jpeg/.webp/.gif/.bmp（不抽正文，交给多模态模型直接看图）
+
+上限：单文件 ≤ 8MB；抽取的正文截断到 200000 字符（防爆上下文）。
+上传成功后会调用 rag.index_file() 建立向量索引（图片除外）；索引失败不影响上传本身。
+"""
 
 import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -19,7 +28,8 @@ UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploads"
 
 TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".py", ".js", ".ts", ".html"}
 PDF_EXTS = {".pdf"}
-ALLOWED_EXTS = TEXT_EXTS | PDF_EXTS
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}  # 图片交给多模态模型直接看
+ALLOWED_EXTS = TEXT_EXTS | PDF_EXTS | IMAGE_EXTS
 MAX_BYTES = 8 * 1024 * 1024  # 8MB
 MAX_CONTENT_CHARS = 200_000  # 注入上下文的正文上限，防止爆 context
 
@@ -51,6 +61,7 @@ def _extract_text(data: bytes, ext: str) -> str:
 @router.post("", response_model=FileOut)
 async def upload_file(
     file: UploadFile,
+    collection_id: int | None = Form(None),
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -59,7 +70,7 @@ async def upload_file(
     if ext not in ALLOWED_EXTS:
         raise HTTPException(
             400,
-            f"不支持的文件类型 {ext or '(无扩展名)'}，支持：txt/md/csv/json/log/py/js/ts/html/pdf",
+            f"不支持的文件类型 {ext or '(无扩展名)'}，支持：txt/md/csv/json/log/py/js/ts/html/pdf/png/jpg/jpeg/webp/gif/bmp",
         )
     data = await file.read()
     if len(data) > MAX_BYTES:
@@ -71,12 +82,16 @@ async def upload_file(
     stored_path = user_dir / stored_name
     stored_path.write_bytes(data)
 
-    content = _extract_text(data, ext)
-    if len(content) > MAX_CONTENT_CHARS:
-        content = content[:MAX_CONTENT_CHARS] + "\n…（内容过长已截断）"
+    if ext in IMAGE_EXTS:
+        content = ""  # 图片不抽正文，交给多模态模型直接看图
+    else:
+        content = _extract_text(data, ext)
+        if len(content) > MAX_CONTENT_CHARS:
+            content = content[:MAX_CONTENT_CHARS] + "\n…（内容过长已截断）"
 
     item = FileItem(
         user_id=current_user.id,
+        collection_id=collection_id,
         filename=name,
         stored_path=str(stored_path.relative_to(UPLOAD_ROOT.parent)),
         size=len(data),
@@ -85,6 +100,16 @@ async def upload_file(
     db.add(item)
     db.commit()
     db.refresh(item)
+
+    # 上传即建立 RAG 索引（切分+向量化）。图片不进库；失败不影响上传本身
+    if ext not in IMAGE_EXTS:
+        try:
+            from app.rag import index_file
+
+            index_file(current_user.id, item.id, content, collection_id)
+        except Exception:
+            pass
+
     return item
 
 
@@ -114,3 +139,64 @@ def get_file(
     if not item:
         raise HTTPException(404, "文档不存在或无权访问")
     return item
+
+
+@router.post("/{file_id}/reindex", response_model=FileOut)
+def reindex_file(
+    file_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """对已上传的文档重建知识库索引（用于 RAG 上线前上传的老文件）。"""
+    item = (
+        db.query(FileItem)
+        .filter(FileItem.id == file_id, FileItem.user_id == current_user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(404, "文档不存在或无权访问")
+    try:
+        from app.rag import index_file
+
+        n = index_file(current_user.id, item.id, item.content or "", item.collection_id)
+    except Exception as e:
+        raise HTTPException(500, f"索引失败：{e}")
+    if n == 0:
+        raise HTTPException(400, "该文档没有可索引的正文（可能是扫描版 PDF）")
+    return item
+
+
+@router.delete("/{file_id}")
+def delete_file(
+    file_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """删除文档：同时清理知识库片段与磁盘上的原始文件。"""
+    item = (
+        db.query(FileItem)
+        .filter(FileItem.id == file_id, FileItem.user_id == current_user.id)
+        .first()
+    )
+    if not item:
+        raise HTTPException(404, "文档不存在或无权访问")
+
+    # 先清理该文档的知识库片段（失败不阻塞删除）
+    try:
+        from app.rag import drop_file
+
+        drop_file(current_user.id, item.id)
+    except Exception:
+        pass
+
+    # 删除磁盘文件（stored_path 形如 uploads/u1/xxx.md，相对 backend 目录）
+    try:
+        path = UPLOAD_ROOT.parent / item.stored_path
+        if path.exists():
+            path.unlink()
+    except Exception:
+        pass
+
+    db.delete(item)
+    db.commit()
+    return {"ok": True}

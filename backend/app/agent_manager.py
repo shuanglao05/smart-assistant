@@ -1,8 +1,14 @@
-"""Agent 工厂：按会话缓存 Agent，thread_id 隔离记忆。
+"""Agent 工厂：按会话缓存 Agent，用 thread_id（= 会话 id）隔离记忆。
 
 本地走 langchain-ollama 的 ChatOllama（Ollama 原生 /api/chat 端点，
 只有在原生端点上 think=false 才生效，关掉 qwen3 的思考可提速 3~5 倍）；
-云端走 langchain-openai 的 ChatOpenAI（兼容智谱 / DeepSeek / 硅基流动 / OpenAI 官方）。
+云端走 langchain-openai 的 ChatOpenAI（兼容阿里云百炼 / 智谱 / DeepSeek / 硅基流动 / OpenAI 官方）。
+
+关于记忆（重要）：
+  记忆由模块级唯一的 _CHECKPOINTER（MemorySaver）承载，所有 Agent 共用同一份，
+  按 thread_id 天然隔离到各自会话。这样"切换模型 / 技能 / 知识库"导致 Agent 重建时，
+  对话历史仍然接得上（若每个 Agent 各建一份记忆，一换模型就会"失忆"）。
+  缓存键 = (会话 id, provider, model, 启用技能, 参与检索的知识库)，任一变化才重建 Agent。
 """
 
 import inspect
@@ -27,6 +33,7 @@ from app.tools import (
     calculator,
     get_weather,
     get_weather_forecast,
+    make_kb_tools,
     make_notification_tools,
     make_todo_tools,
     search_web,
@@ -36,6 +43,10 @@ from app.tools import (
 # 原因：每次构建 agent 都要初始化大模型、绑定工具，开销不小；同一个会话
 # 重复提问时直接复用缓存即可，避免反复创建。
 agent_cache: dict[int, object] = {}  # conversation_id -> agent
+
+# 全局共享一个 MemorySaver：所有 Agent（包括切换模型 / 技能 / 知识库后重建的）共用同一份记忆，
+# 这样"换模型"时对话历史不会丢。记忆按 thread_id（= 会话 id）天然隔离，不同会话互不干扰。
+_CHECKPOINTER = MemorySaver()
 
 
 def build_llm(provider: str | None = None, model: str | None = None):
@@ -93,16 +104,17 @@ def _create_agent(llm, tools, system_prompt: str | None = None):
     prompt = system_prompt or config.SYSTEM_PROMPT
     # 不同 langgraph 版本里，系统提示词这个参数可能叫 "prompt" 或 "state_modifier"，
     # 用 inspect 检查函数签名，自动适配，避免版本升级后直接报错。
+    # checkpointer 统一用全局共享的 _CHECKPOINTER（见文件头），保证换模型不丢历史。
     params = inspect.signature(create_react_agent).parameters
     if "prompt" in params:
         # create_react_agent(大脑, 工具, 系统提示词, 记忆) —— 返回的就是可调用 agent
-        return create_react_agent(llm, tools, prompt=prompt, checkpointer=MemorySaver())
+        return create_react_agent(llm, tools, prompt=prompt, checkpointer=_CHECKPOINTER)
     if "state_modifier" in params:
         return create_react_agent(
-            llm, tools, state_modifier=prompt, checkpointer=MemorySaver()
+            llm, tools, state_modifier=prompt, checkpointer=_CHECKPOINTER
         )
     # 兜底：不传系统提示词，只给模型和工具
-    return create_react_agent(llm, tools, checkpointer=MemorySaver())
+    return create_react_agent(llm, tools, checkpointer=_CHECKPOINTER)
 
 
 def get_agent_for_conversation(
@@ -135,11 +147,13 @@ def get_agent_for_conversation(
             else []
         )
         active_ids_sorted = tuple(s.id for s in active_skills)
+        # 本次对话启用（参与检索）的知识库；空元组 = 不限制（检索全部库）
+        active_kb_ids = tuple(int(x) for x in (conv.active_kb_ids or [])) if conv else ()
 
         provider = (provider or config.LLM_PROVIDER).strip().lower()
         model = model or (config.OLLAMA_MODEL if provider == "ollama" else config.CLOUD_MODEL)
-        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能) —— 任何一个变了都要重建
-        cache_key = (conversation_id, provider, model, active_ids_sorted)
+        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能, 已启用知识库) —— 任何一个变了都要重建
+        cache_key = (conversation_id, provider, model, active_ids_sorted, active_kb_ids)
         if cache_key in agent_cache:
             return agent_cache[cache_key]
 
@@ -156,11 +170,12 @@ def get_agent_for_conversation(
             )
             system_prompt = config.SYSTEM_PROMPT + extra
 
-        # 组装工具箱：通用工具 + 按当前用户隔离的"待办"工具 + "通知"工具
+        # 组装工具箱：通用工具 + 按当前用户隔离的"待办"工具 + "通知"工具 + "知识库检索"工具
         tools = (
             [calculator, get_weather, get_weather_forecast, search_web]
             + make_todo_tools(user_id)
             + make_notification_tools(user_id)
+            + make_kb_tools(user_id, list(active_kb_ids))
         )
         # 交给 _create_agent 组装出带记忆的 ReAct 智能体
         agent = _create_agent(llm, tools, system_prompt)
@@ -179,3 +194,14 @@ def evict_agent(conversation_id: int):
     """
     for key in [k for k in agent_cache if k[0] == conversation_id]:
         agent_cache.pop(key, None)
+
+
+def clear_conversation_memory(conversation_id: int):
+    """清掉某会话在共享记忆里的历史（仅"删除会话"时调用，避免内存泄漏）。
+
+    注意：切换模型 / 技能 / 知识库时【不要】调用，否则会把对话历史清掉。
+    """
+    try:
+        _CHECKPOINTER.delete_thread(str(conversation_id))
+    except Exception:
+        pass

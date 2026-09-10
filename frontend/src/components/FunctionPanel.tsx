@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
+  BookOpen,
   CalendarDays,
   ChevronRight,
   CloudSun,
@@ -18,6 +19,7 @@ const FUNCS: { path: string; icon: ReactNode; name: string; desc: string }[] = [
   { path: '/', icon: <MessageSquare size={18} />, name: '对话', desc: 'AI 聊天助手' },
   { path: '/weather', icon: <CloudSun size={18} />, name: '天气', desc: '实况与未来 3 天' },
   { path: '/skills', icon: <Puzzle size={18} />, name: '技能', desc: '技能库与人设' },
+  { path: '/knowledge', icon: <BookOpen size={18} />, name: '知识库', desc: '上传资料与检索' },
   { path: '/todos', icon: <ListChecks size={18} />, name: '待办', desc: '待办事项管理' },
   { path: '/timer', icon: <Timer size={18} />, name: '计时器', desc: '倒计时 / 秒表' },
   { path: '/calendar', icon: <CalendarDays size={18} />, name: '日历', desc: '月视图与备忘' },

@@ -1,10 +1,15 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
+  Brain,
   Check,
+  ChevronDown,
+  Cloud,
   Copy,
+  Cpu,
   Download,
   FileText,
+  Image as ImageIcon,
   Loader2,
   MessageSquare,
   PanelRight,
@@ -21,7 +26,30 @@ import NotificationBell from './NotificationBell'
 import CloudConnectModal from './CloudConnectModal'
 import SettingsModal from './SettingsModal'
 import SkillCards from './SkillCards'
+import KbPicker from './KbPicker'
+import ModelPicker from './ModelPicker'
 import DocViewer from './DocViewer'
+
+/** 判断文件名是不是图片（用于切换图标 / 提示） */
+const isImgName = (n: string) => /\.(png|jpe?g|webp|gif|bmp)$/i.test(n)
+
+/** 思考过程折叠块：流式时自动展开、出结果后自动收起，点标题可手动展开 */
+function ThinkBox({ text, streaming }: { text: string; streaming: boolean }) {
+  const [open, setOpen] = useState(streaming)
+  useEffect(() => {
+    setOpen(streaming)
+  }, [streaming])
+  return (
+    <div className={`think-box ${open ? 'open' : ''}`}>
+      <button className="think-head" onClick={() => setOpen((v) => !v)}>
+        <Brain size={12} />
+        <span>{streaming ? '正在思考…' : '思考过程'}</span>
+        <ChevronDown size={12} className="think-caret" />
+      </button>
+      {open && <div className="think-body">{text}</div>}
+    </div>
+  )
+}
 
 /** 每条 AI 回复下方的操作条（复制 / 重新生成）——不放进气泡内 */
 function MsgBar({
@@ -81,6 +109,8 @@ export default function ChatWindow({
   onTodoChanged,
   activeSkillIds,
   onSkillsChanged,
+  activeKbIds,
+  onKbChanged,
   profile,
   onProfileUpdate,
   onLogout,
@@ -100,6 +130,8 @@ export default function ChatWindow({
   onTodoChanged: () => void
   activeSkillIds: number[]
   onSkillsChanged: () => void
+  activeKbIds: number[]
+  onKbChanged: () => void
   profile: UserProfile | null
   onProfileUpdate: (p: UserProfile) => void
   onLogout: () => void
@@ -108,6 +140,7 @@ export default function ChatWindow({
   const [showSettings, setShowSettings] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
+  const [inputH, setInputH] = useState<number | null>(null) // 手动拖动后的输入框高度（null=自动增高）
   const [loading, setLoading] = useState(false)
   const [attaches, setAttaches] = useState<FileInfo[]>([])
   const [attaching, setAttaching] = useState(false)
@@ -121,13 +154,40 @@ export default function ChatWindow({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const ctrlRef = useRef<AbortController | null>(null)
 
-  // 输入框跟随内容自动增高（最高 200px，再高就内部滚动）
+  // 输入框高度：未手动拖动时按内容自动增高（最高 200px）；手动拖动后固定为用户设定高度
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
+    if (inputH != null) {
+      el.style.height = `${inputH}px`
+      return
+    }
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [input])
+  }, [input, inputH])
+
+  // 拖动输入框上沿自由调整高度（双击手柄恢复自动增高）
+  const startComposerResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const el = inputRef.current
+    if (!el) return
+    const startY = e.clientY
+    const startH = el.offsetHeight
+    const move = (ev: MouseEvent) => {
+      // 向上拖 = 变高：新高度 = 起始高度 - 鼠标位移
+      setInputH(Math.max(28, Math.min(400, startH - (ev.clientY - startY))))
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
 
   // Enter 发送，Shift+Enter 换行；中文输入法拼写中的 Enter 不发送
   const onInputKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -265,7 +325,42 @@ export default function ChatWindow({
               }
               return c
             })
+          } else if (typeof data.reasoning === 'string') {
+            // 思考过程增量：与正文分开累积，单独展示
+            const r = data.reasoning
+            setMessages((m) => {
+              const c = [...m]
+              const last = c[c.length - 1]
+              if (last && last.role === 'assistant') {
+                c[c.length - 1] = { ...last, reasoning: (last.reasoning || '') + r }
+              }
+              return c
+            })
+          } else if (Array.isArray(data.sources)) {
+            // 知识库命中来源：挂到最后一条 assistant 消息上，回答下方展示
+            const srcs: string[] = data.sources
+            setMessages((m) => {
+              const c = [...m]
+              const last = c[c.length - 1]
+              if (last && last.role === 'assistant') {
+                c[c.length - 1] = { ...last, sources: srcs }
+              }
+              return c
+            })
           } else if (data.done) {
+            // 结束事件带回了本次回答所用的模型 → 标注到最后一条助手回答上
+            if (data.provider || data.model) {
+              const pv = data.provider as string | undefined
+              const md = data.model as string | undefined
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant') {
+                  c[c.length - 1] = { ...last, provider: pv, model: md }
+                }
+                return c
+              })
+            }
             onTitleChange()
             onTodoChanged()
           }
@@ -330,6 +425,18 @@ export default function ChatWindow({
     await runStream({ session_id: sessionId, regenerate: true })
   }
 
+  // 点击来源 → 按文件名找到对应文档并打开右侧查看器
+  const openSource = async (name: string) => {
+    try {
+      const { data } = await filesApi.list()
+      const hit = data.find((f) => f.filename === name)
+      if (hit) setViewing({ id: hit.id, filename: hit.filename })
+      else alert(`未找到文档《${name}》`)
+    } catch {
+      /* ignore */
+    }
+  }
+
   const lastAssistantIsEmpty =
     loading &&
     messages.length > 0 &&
@@ -342,27 +449,13 @@ export default function ChatWindow({
         <span className="topbar-title">{title || '对话'}</span>
         <div className="topbar-actions">
           <NotificationBell />
-          <select
-            className="model-select"
+          <ModelPicker
+            options={options}
             value={`${provider || 'ollama'}|${model || ''}`}
             disabled={loading}
-            onChange={(e) => {
-              const [p, m] = e.target.value.split('|')
-              if (p === 'cloud' && !options.find((o) => o.provider === 'cloud')?.configured) {
-                setShowCloud(true)
-                return
-              }
-              onModelChange(p, m)
-            }}
-            title="切换当前会话使用的模型"
-          >
-            {options.map((o) => (
-              <option key={`${o.provider}|${o.model}`} value={`${o.provider}|${o.model}`}>
-                {o.label}
-                {o.configured ? '' : '（未配置，点击接入）'}
-              </option>
-            ))}
-          </select>
+            onChange={onModelChange}
+            onNeedCloud={() => setShowCloud(true)}
+          />
           <button
             className="topbar-btn"
             onClick={exportMarkdown}
@@ -393,6 +486,7 @@ export default function ChatWindow({
           open={showCloud}
           onClose={() => setShowCloud(false)}
           onSubmit={onConnectCloud}
+          options={options}
         />
       </div>
 
@@ -407,43 +501,99 @@ export default function ChatWindow({
           </div>
         )}
         {messages.map((m, i) => {
-          if (m.role === 'assistant' && !m.content) {
+          const isLast = i === messages.length - 1
+          const streaming = loading && isLast
+
+          if (m.role === 'user') {
             return (
-              <div key={i} className="bubble-row left">
-                <div className="avatar">AI</div>
-                <div className="bubble bubble-assistant typing">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-                </div>
-              </div>
+              <Fragment key={i}>
+                {m.ref_files && m.ref_files.length > 0 && (
+                  <div className="ref-docs">
+                    <span className="ref-docs-label">引用文档：</span>
+                    {m.ref_files.map((f) => (
+                      <button
+                        key={f.id}
+                        className="ref-doc-chip"
+                        title={`查看 ${f.filename}`}
+                        onClick={() => setViewing({ id: f.id, filename: f.filename })}
+                      >
+                        {isImgName(f.filename) ? (
+                          <ImageIcon size={12} />
+                        ) : (
+                          <FileText size={12} />
+                        )}{' '}
+                        {f.filename}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <MessageBubble role={m.role} content={m.content} />
+              </Fragment>
             )
           }
-          const isFinal = i === messages.length - 1
+
+          // 助手消息：思考过程（若有）+ 正文 / 加载态 / 已停止
           return (
             <Fragment key={i}>
-              {m.role === 'user' && m.ref_files && m.ref_files.length > 0 && (
-                <div className="ref-docs">
-                  <span className="ref-docs-label">引用文档：</span>
-                  {m.ref_files.map((f) => (
-                    <button
-                      key={f.id}
-                      className="ref-doc-chip"
-                      title={`查看 ${f.filename}`}
-                      onClick={() => setViewing({ id: f.id, filename: f.filename })}
-                    >
-                      <FileText size={12} /> {f.filename}
-                    </button>
-                  ))}
-                </div>
+              {m.reasoning && (
+                <ThinkBox text={m.reasoning} streaming={streaming && !m.content} />
               )}
-              <MessageBubble role={m.role} content={m.content} />
-              {m.role === 'assistant' && !!m.content && (
-                <MsgBar
-                  content={m.content}
-                  canRegen={isFinal && !loading}
-                  onRegen={regenerate}
-                />
+              {!m.content ? (
+                streaming ? (
+                  <div className="bubble-row left">
+                    <div className="avatar">AI</div>
+                    <div className="bubble bubble-assistant typing">
+                      <span></span>
+                      <span></span>
+                      <span></span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bubble-row left">
+                    <div className="avatar">AI</div>
+                    <div className="bubble bubble-assistant stopped">
+                      <span className="stopped-text">已停止生成</span>
+                      {isLast && (
+                        <button className="stopped-regen" onClick={regenerate}>
+                          <RefreshCw size={12} /> 重新生成
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              ) : (
+                <>
+                  <MessageBubble role={m.role} content={m.content} />
+                  {m.sources && m.sources.length > 0 && (
+                    <div className="msg-sources">
+                      <span className="msg-sources-label">来源：</span>
+                      {m.sources.map((s) => (
+                        <button
+                          key={s}
+                          className="src-chip"
+                          onClick={() => openSource(s)}
+                          title={`查看 ${s}`}
+                        >
+                          <FileText size={12} /> {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <MsgBar
+                    content={m.content}
+                    canRegen={isLast && !loading}
+                    onRegen={regenerate}
+                  />
+                  {m.model && (
+                    <div
+                      className="msg-model"
+                      title={`本条回答由${m.provider === 'cloud' ? '云端' : '本地'}模型 ${m.model} 生成`}
+                    >
+                      {m.provider === 'cloud' ? <Cloud size={11} /> : <Cpu size={11} />}
+                      {m.provider === 'cloud' ? '云端' : '本地'} · {m.model}
+                    </div>
+                  )}
+                </>
               )}
             </Fragment>
           )
@@ -456,7 +606,8 @@ export default function ChatWindow({
           <div className="attach-chips">
             {attaches.map((a) => (
               <span key={a.id} className="chip">
-                <FileText size={12} /> {a.filename}
+                {isImgName(a.filename) ? <ImageIcon size={12} /> : <FileText size={12} />}{' '}
+                {a.filename}
                 <button
                   className="chip-del"
                   onClick={() => setAttaches((prev) => prev.filter((x) => x.id !== a.id))}
@@ -469,6 +620,12 @@ export default function ChatWindow({
           </div>
         )}
         <div className="composer-box">
+          <div
+            className="composer-resize"
+            onMouseDown={startComposerResize}
+            onDoubleClick={() => setInputH(null)}
+            title="拖动调整输入框高度（双击恢复自动）"
+          />
           <textarea
             ref={inputRef}
             className="composer-input"
@@ -495,14 +652,19 @@ export default function ChatWindow({
                 className="attach-btn"
                 onClick={() => fileRef.current?.click()}
                 disabled={loading || attaching}
-                title="上传附件（txt/md/csv/json/pdf…）让助手阅读后回答"
+                title="上传附件：文档（txt/md/csv/json/pdf…）或图片，让助手阅读 / 识别后回答"
               >
-                {attaching ? <Loader2 size={16} className="spin" /> : <Paperclip size={16} />}
+                {attaching ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
               </button>
               <SkillCards
                 sessionId={sessionId}
                 activeSkillIds={activeSkillIds}
                 onChanged={onSkillsChanged}
+              />
+              <KbPicker
+                sessionId={sessionId}
+                activeKbIds={activeKbIds}
+                onChanged={onKbChanged}
               />
             </div>
             <div className="composer-tools-right">
@@ -511,7 +673,12 @@ export default function ChatWindow({
                   <Square size={13} /> 停止
                 </button>
               ) : (
-                <button className="btn primary send" onClick={send} disabled={!input.trim()}>
+                <button
+                  className="btn primary send"
+                  onClick={send}
+                  disabled={!input.trim()}
+                  title="发送（Enter 发送，Shift+Enter 换行）"
+                >
                   <ArrowUp size={15} /> 发送
                 </button>
               )}

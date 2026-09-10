@@ -66,7 +66,12 @@ export default function TodoTool({ refreshKey }: { refreshKey: number }) {
         ) : (
           todos.map((t) => (
             <div key={t.id} className={`todo-item ${t.done ? 'done' : ''}`}>
-              <button className="check" onClick={() => toggle(t)} aria-label="切换完成">
+              <button
+                className="check"
+                onClick={() => toggle(t)}
+                aria-label="切换完成"
+                title="标记完成 / 取消完成"
+              >
                 {t.done ? <Check size={12} /> : ''}
               </button>
               <span className="todo-task" onClick={() => toggle(t)}>

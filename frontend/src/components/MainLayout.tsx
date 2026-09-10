@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { llmApi, sessionApi } from '../api'
 import type { LlmConfigPayload, LlmOption, Session, UserProfile } from '../types'
@@ -10,6 +10,7 @@ import SkillsPage from '../pages/SkillsPage'
 import TodosPage from '../pages/TodosPage'
 import TimerPage from '../pages/TimerPage'
 import CalendarPage from '../pages/CalendarPage'
+import KnowledgePage from '../pages/KnowledgePage'
 
 /** 登录后主布局：左=会话列表，中=路由内容（对话/功能页），右=功能入口 */
 export default function MainLayout({
@@ -29,6 +30,15 @@ export default function MainLayout({
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem('panelOpen') !== '0')
   const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem('panelWidth')) || 320)
   const [incomingText, setIncomingText] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<number | null>(null)
+
+  // 全局轻提示（模型切换等操作反馈）
+  const showToast = (msg: string) => {
+    setToast(msg)
+    if (toastTimer.current) window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2200)
+  }
 
   const navigate = useNavigate()
   const { pathname } = useLocation()
@@ -110,8 +120,13 @@ export default function MainLayout({
 
   const handleModelChange = async (provider: string, model: string) => {
     if (currentId == null) return
-    const { data } = await sessionApi.update(currentId, { provider, model })
-    setSessions((prev) => prev.map((s) => (s.id === currentId ? data : s)))
+    try {
+      const { data } = await sessionApi.update(currentId, { provider, model })
+      setSessions((prev) => prev.map((s) => (s.id === currentId ? data : s)))
+      // 切换成功不再弹提示：每条回答下方会标注所用模型，不额外打扰；仅失败时提示
+    } catch (e: any) {
+      showToast(`切换失败：${e?.response?.data?.detail || e?.message || e}`)
+    }
   }
 
   const handleRename = async (id: number, title: string) => {
@@ -130,9 +145,14 @@ export default function MainLayout({
   }
 
   const handleConnectCloud = async (payload: LlmConfigPayload) => {
-    const { data: opts } = await llmApi.configure(payload)
+    // 填了 Key = 真正接入（会先测连）；留空 = 仅更新模型清单
+    const hasKey = !!payload.cloud_api_key?.trim()
+    const { data: opts } = hasKey
+      ? await llmApi.configure(payload)
+      : await llmApi.saveModels(payload.cloud_models ?? [])
     setOptions(opts)
-    if (currentId != null) {
+    showToast(hasKey ? '云端已接入，已切换到云端模型' : '云端模型清单已更新')
+    if (hasKey && currentId != null) {
       const cloud = opts.find((o) => o.provider === 'cloud')
       const { data } = await sessionApi.update(currentId, {
         provider: 'cloud',
@@ -165,6 +185,8 @@ export default function MainLayout({
         return <TimerPage />
       case '/calendar':
         return <CalendarPage />
+      case '/knowledge':
+        return <KnowledgePage />
       default:
         return current ? (
           <ChatWindow
@@ -184,6 +206,8 @@ export default function MainLayout({
             onTodoChanged={() => setTodoKey((k) => k + 1)}
             activeSkillIds={current.active_skill_ids || []}
             onSkillsChanged={refresh}
+            activeKbIds={current.active_kb_ids || []}
+            onKbChanged={refresh}
             profile={profile}
             onProfileUpdate={onProfileUpdate}
             onLogout={onLogout}
@@ -230,6 +254,7 @@ export default function MainLayout({
           <FunctionPanel />
         </>
       )}
+      {toast && <div className="app-toast">{toast}</div>}
     </div>
   )
 }

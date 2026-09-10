@@ -4,6 +4,9 @@ import type {
   AuthResult,
   FileDetail,
   FileInfo,
+  KbCollection,
+  KbDocument,
+  KbGraph,
   LlmConfigPayload,
   LlmOption,
   Message,
@@ -31,7 +34,13 @@ export const sessionApi = {
   messages: (id: number) => client.get<Message[]>(`/sessions/${id}/messages`),
   update: (
     id: number,
-    data: { title?: string; provider?: string; model?: string; active_skill_ids?: number[] }
+    data: {
+      title?: string
+      provider?: string
+      model?: string
+      active_skill_ids?: number[]
+      active_kb_ids?: number[]
+    }
   ) => client.patch<Session>(`/sessions/${id}`, data),
   remove: (id: number) => client.delete(`/sessions/${id}`),
 }
@@ -39,6 +48,13 @@ export const sessionApi = {
 export const llmApi = {
   options: () => client.get<LlmOption[]>('/llm-options'),
   configure: (data: LlmConfigPayload) => client.post<LlmOption[]>('/llm-config', data),
+  getConfig: () =>
+    client.get<{ cloud_base_url: string; cloud_model: string; cloud_models: string[] }>(
+      '/llm-config'
+    ),
+  fetchModels: () => client.get<{ models: string[] }>('/llm-config/models'),
+  saveModels: (models: string[]) =>
+    client.post<LlmOption[]>('/llm-config/models', { cloud_models: models }),
 }
 
 export const chatApi = {
@@ -69,13 +85,33 @@ export const skillsApi = {
 }
 
 export const filesApi = {
-  upload: (file: File) => {
+  upload: (file: File, collectionId?: number) => {
     const fd = new FormData()
     fd.append('file', file)
+    if (collectionId != null) fd.append('collection_id', String(collectionId))
     return client.post<FileInfo>('/files', fd)
   },
   list: () => client.get<FileInfo[]>('/files'),
   get: (id: number) => client.get<FileDetail>(`/files/${id}`),
+  remove: (id: number) => client.delete<{ ok: boolean }>(`/files/${id}`),
+  reindex: (id: number) => client.post<FileInfo>(`/files/${id}/reindex`),
+}
+
+export const kbApi = {
+  collections: () => client.get<KbCollection[]>('/kb/collections'),
+  createCollection: (name: string) => client.post<KbCollection>('/kb/collections', { name }),
+  renameCollection: (id: number, name: string) =>
+    client.patch<KbCollection>(`/kb/collections/${id}`, { name }),
+  removeCollection: (id: number) => client.delete<{ ok: boolean }>(`/kb/collections/${id}`),
+  documents: (collectionId?: number) =>
+    client.get<KbDocument[]>(
+      '/kb/documents',
+      collectionId != null ? { params: { collection_id: collectionId } } : undefined
+    ),
+  graph: (collectionId: number) =>
+    client.get<KbGraph>('/kb/graph', { params: { collection_id: collectionId } }),
+  reindexAll: () =>
+    client.post<{ indexed: number; failed: number; total: number }>('/kb/reindex-all'),
 }
 
 export const searchApi = {

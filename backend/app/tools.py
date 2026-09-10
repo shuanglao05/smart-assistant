@@ -1,4 +1,12 @@
-"""Agent 工具集：计算器 / 天气 / 网页搜索 / 待办。
+"""Agent 工具集。
+
+包含两部分：
+  1) 全局通用工具（单例，直接 `@tool` 装饰）：
+     calculator（ast 安全计算）/ get_weather / get_weather_forecast / search_web
+  2) "按用户隔离"的工具工厂（闭包捕获 user_id，返回一组绑定该用户的工具）：
+     make_todo_tools        待办事项（增/查）
+     make_notification_tools 站内提醒（推送到右上角通知中心）
+     make_kb_tools           知识库检索（RAG：翻用户上传的资料回答）
 
 注意：工具的 docstring 是给大模型看的"说明书"，必须写清用途、输入格式、
 返回内容，否则模型会误用或不用工具。
@@ -13,7 +21,7 @@ from langchain_core.tools import tool
 
 from app.config import AMAP_API_KEY, OPENWEATHERMAP_API_KEY
 from app.database import SessionLocal
-from app.models import Notification, TodoItem
+from app.models import FileItem, Notification, TodoItem
 
 # ------------------------------------------------------------------ 安全计算器
 # 用 AST 白名单解析，绝不用 eval（eval 可执行任意代码）
@@ -313,3 +321,39 @@ def make_notification_tools(user_id: int):
             db.close()
 
     return [notify_user]
+
+
+# ------------------------------------------------------------------ 知识库检索（RAG，按用户隔离）
+def make_kb_tools(user_id: int, kb_ids: list[int] | None = None):
+    """把 user_id（以及本次对话选中的知识库集合）绑进检索工具，实现多库 + 多用户隔离。
+
+    内部调用 app.rag.search()：把问题向量化 → 在选中（或全部）知识库里算余弦 → 取 top-k。
+    这使模型能"翻着自己的资料"回答，并在结果里带上来源文件名。
+    """
+
+    @tool
+    def search_knowledge_base(query: str) -> str:
+        """在用户上传的知识库文档中检索最相关的片段。当用户询问其上传资料（课程笔记、报告、说明书、规范、合同等）里的具体内容时使用。输入检索问题，返回若干相关片段并标注来源文件名。"""
+        from app.rag import search  # 延迟导入，避免循环依赖
+
+        hits = search(user_id, query, collection_ids=kb_ids)
+        if not hits:
+            return "知识库中没有找到相关内容（可能尚未上传文档、文档未建立索引，或本次对话未启用对应知识库）"
+
+        # 把 file_id 映射成文件名，方便模型在回答里注明来源
+        db = SessionLocal()
+        try:
+            file_ids = {fid for _text, fid, _score in hits}
+            names = {
+                f.id: f.filename
+                for f in db.query(FileItem).filter(FileItem.id.in_(file_ids)).all()
+            }
+        finally:
+            db.close()
+
+        blocks = []
+        for text, fid, _score in hits:
+            blocks.append(f"【{names.get(fid, f'文件{fid}')}】{text}")
+        return "\n\n".join(blocks)
+
+    return [search_knowledge_base]
