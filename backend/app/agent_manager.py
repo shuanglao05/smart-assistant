@@ -13,6 +13,8 @@
 
 import inspect
 
+import httpx
+
 # ── LangGraph 的两个核心 import ──
 # MemorySaver：LangGraph 提供的"内存检查点"。它会在 agent 运行结束后，
 # 把这一轮对话的状态（消息列表）保存进内存，下一次同一个会话再调用时
@@ -47,6 +49,22 @@ agent_cache: dict[int, object] = {}  # conversation_id -> agent
 # 全局共享一个 MemorySaver：所有 Agent（包括切换模型 / 技能 / 知识库后重建的）共用同一份记忆，
 # 这样"换模型"时对话历史不会丢。记忆按 thread_id（= 会话 id）天然隔离，不同会话互不干扰。
 _CHECKPOINTER = MemorySaver()
+
+# 云端专用 HTTP 客户端（模块级单例，懒创建）。
+# trust_env=False 让它【绕过系统代理直连】——阿里云是国内站，直连更快更稳；
+# 系统代理（Clash/V2Ray 等）常会缓冲 text/event-stream，导致流式首 token 延迟 10s+，
+# 而非流式 invoke 却只要 ~1.7s，两者差异正是 SSE 被代理缓冲的典型表现。
+_CLOUD_HTTP: httpx.Client | None = None
+
+
+def _cloud_http_client() -> httpx.Client:
+    global _CLOUD_HTTP
+    if _CLOUD_HTTP is None:
+        _CLOUD_HTTP = httpx.Client(
+            trust_env=False,
+            timeout=httpx.Timeout(180.0, connect=15.0),
+        )
+    return _CLOUD_HTTP
 
 
 def build_llm(provider: str | None = None, model: str | None = None):
@@ -89,6 +107,13 @@ def build_llm(provider: str | None = None, model: str | None = None):
         "model": model or config.CLOUD_MODEL,
         "api_key": config.CLOUD_API_KEY,
         "temperature": 0,
+        # 开启流式：agent.stream(stream_mode="messages") 才能逐 token 推给前端，
+        # 否则整段生成完才一次性吐出，前端长时间空白、像"不回复"。
+        "streaming": True,
+        "timeout": 180,   # 单次请求超时（秒），避免云端卡死时无期限挂起
+        "max_retries": 2,  # 失败自动重试次数
+        # 绕过系统代理直连（见 _cloud_http_client 说明），避免 SSE 流被代理缓冲拖慢首字
+        "http_client": _cloud_http_client(),
     }
     if config.CLOUD_BASE_URL:
         kwargs["base_url"] = config.CLOUD_BASE_URL

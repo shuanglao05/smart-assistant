@@ -22,7 +22,7 @@ SQLAlchemy 会负责把它翻译成真正的 SQL（INSERT/SELECT/UPDATE...），
 
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
 
 from app import config
 from app.database import Base
@@ -87,6 +87,62 @@ class TodoItem(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     task = Column(String(500), nullable=False)
     done = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class Note(Base):
+    """智能笔记：按天归档的随手记，content 支持 Markdown。
+
+    day 形如 "2026-09-11"，用于把笔记按日期分组、也用于"让 AI 归纳某天的笔记"。
+    """
+
+    __tablename__ = "notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False, default="")
+    content = Column(Text, nullable=False, default="")
+    day = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD，按日期归档
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class Schedule(Base):
+    """日程：某时刻的一条安排。
+
+    start_at 用 epoch 秒（UTC 时间戳，float）保存，避免时区换算的坑；
+    开始前 5 分钟由后台定时任务（见 schedules.reminder_loop）发一条站内通知提醒。
+    """
+
+    __tablename__ = "schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    start_at = Column(Float, nullable=False, index=True)  # epoch 秒
+    note = Column(Text, nullable=True)
+    reminded = Column(Boolean, default=False, nullable=False)  # 是否已发过提醒
+    created_at = Column(DateTime, default=utcnow)
+
+
+class Course(Base):
+    """课表：一门课在一周中的位置（星期几 + 起始/结束节次）。
+
+    weekday: 1=周一 … 7=周日；节次用整数表示（如第 1~2 节）。
+    """
+
+    __tablename__ = "courses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    teacher = Column(String(100), nullable=True)
+    location = Column(String(100), nullable=True)
+    weekday = Column(Integer, nullable=False, index=True)  # 1=周一 … 7=周日
+    start_section = Column(Integer, nullable=False)  # 起始节次
+    end_section = Column(Integer, nullable=False)  # 结束节次
+    weeks = Column(String(50), nullable=True)  # 如 "1-16"
+    color = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
 

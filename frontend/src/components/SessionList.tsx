@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronsLeft, ChevronsRight, MessageSquare, Pencil, Plus, Search, X } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, MessageSquare, Pencil, Plus, Search, Settings, Trash2, X } from 'lucide-react'
 import { searchApi } from '../api'
 import type { SearchHit, Session, UserProfile } from '../types'
 
@@ -17,6 +17,8 @@ export default function SessionList({
   onCreate,
   onDelete,
   onRename,
+  onClearAll,
+  onOpenSettings,
   onLogout,
   profile,
 }: {
@@ -28,6 +30,8 @@ export default function SessionList({
   onCreate: () => void
   onDelete: (id: number) => void
   onRename: (id: number, title: string) => void
+  onClearAll: () => void
+  onOpenSettings: () => void
   onLogout: () => void
   profile: UserProfile | null
 }) {
@@ -121,6 +125,18 @@ export default function SessionList({
         <>
           <button className="btn new-chat" onClick={onCreate} title="新建一个对话">
             <Plus size={14} /> 新建会话
+          </button>
+
+          <button
+            className="btn clear-all"
+            onClick={() => {
+              if (sessions.length === 0) return
+              if (confirm('确定清空全部历史会话？此操作不可撤销')) onClearAll()
+            }}
+            disabled={sessions.length === 0}
+            title="清空当前账号下的全部历史会话"
+          >
+            <Trash2 size={14} /> 清空全部
           </button>
 
           <div className="search-area">
@@ -226,9 +242,19 @@ export default function SessionList({
           </div>
           )}
 
-          <button className="logout" onClick={onLogout} title="退出当前账号">
-            退出登录
-          </button>
+          <div className="sidebar-footer">
+            <button className="logout" onClick={onLogout} title="退出当前账号">
+              退出登录
+            </button>
+            <button
+              className="settings-gear"
+              onClick={onOpenSettings}
+              title="设置"
+              aria-label="设置"
+            >
+              <Settings size={15} />
+            </button>
+          </div>
         </>
       )}
     </aside>

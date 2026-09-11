@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { notificationApi } from '../api'
 import { Timer } from 'lucide-react'
 import PageShell from '../components/PageShell'
+import { CHIME_TONES, playChime, type ChimeTone } from '../chime'
 
 type Tab = 'countdown' | 'stopwatch'
 
@@ -11,6 +12,19 @@ const PRESETS = [
   { label: '10 分钟', sec: 600 },
   { label: '25 分钟', sec: 1500 }, // 番茄钟
 ]
+
+const TONE_KEY = 'timer_tone'
+const VOLUME_KEY = 'timer_volume'
+
+function loadTone(): ChimeTone {
+  const t = localStorage.getItem(TONE_KEY) as ChimeTone | null
+  return CHIME_TONES.some((x) => x.id === t) ? (t as ChimeTone) : 'classic'
+}
+
+function loadVolume(): number {
+  const v = Number(localStorage.getItem(VOLUME_KEY))
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.6
+}
 
 function fmt(sec: number) {
   const s = Math.max(0, Math.floor(sec))
@@ -35,6 +49,24 @@ export default function TimerPage() {
   const [inputS, setInputS] = useState('0')
   const endRef = useRef<number | null>(null)
 
+  // ---- 提示音设置（音色 + 音量，保存在本机）----
+  const [tone, setTone] = useState<ChimeTone>(loadTone)
+  const [volume, setVolume] = useState<number>(loadVolume)
+  const toneRef = useRef(tone)
+  const volRef = useRef(volume)
+  toneRef.current = tone
+  volRef.current = volume
+
+  const changeTone = (t: ChimeTone) => {
+    setTone(t)
+    localStorage.setItem(TONE_KEY, t)
+    playChime(t, volRef.current) // 换音色即试听
+  }
+  const changeVolume = (v: number) => {
+    setVolume(v)
+    localStorage.setItem(VOLUME_KEY, String(v))
+  }
+
   // ---- 秒表 ----
   const [swMs, setSwMs] = useState(0)
   const [swRunning, setSwRunning] = useState(false)
@@ -55,23 +87,8 @@ export default function TimerPage() {
         notificationApi
           .create('⏰ 倒计时结束', `你设定的 ${fmt(total)} 倒计时已完成`, 'remind')
           .catch(() => {})
-        try {
-          const ctx = new AudioContext()
-          const o = ctx.createOscillator()
-          const g = ctx.createGain()
-          o.connect(g)
-          g.connect(ctx.destination)
-          o.frequency.value = 880
-          g.gain.setValueAtTime(0.001, ctx.currentTime)
-          g.gain.exponentialRampToValueAtTime(0.2, ctx.currentTime + 0.02)
-          o.start()
-          setTimeout(() => {
-            g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5)
-            o.stop(ctx.currentTime + 0.55)
-          }, 500)
-        } catch {
-          /* 声音不可用时忽略 */
-        }
+        // 播放所选提示音（音色/音量实时读取，避免被闭包固化）
+        playChime(toneRef.current, volRef.current)
         alert('⏰ 倒计时结束！')
       } else {
         setLeft(remain)
@@ -123,6 +140,7 @@ export default function TimerPage() {
     <PageShell
       icon={<Timer size={18} />}
       title="计时器"
+      model={null}
       actions={
         <div className="seg">
           <button className={`seg-btn ${tab === 'countdown' ? 'active' : ''}`} onClick={() => setTab('countdown')}>
@@ -210,7 +228,39 @@ export default function TimerPage() {
             </button>
           </div>
 
-          <p className="settings-hint">倒计时结束会推送一条站内通知（右上角铃铛）并播放提示音。</p>
+          <div className="timer-sound">
+            <label className="ts-item">
+              <span>提示音</span>
+              <select
+                className="input ts-select"
+                value={tone}
+                onChange={(e) => changeTone(e.target.value as ChimeTone)}
+              >
+                {CHIME_TONES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="ts-item">
+              <span>音量</span>
+              <input
+                type="range"
+                className="ts-range"
+                min={0}
+                max={100}
+                value={Math.round(volume * 100)}
+                onChange={(e) => changeVolume(Number(e.target.value) / 100)}
+              />
+              <em className="ts-val">{Math.round(volume * 100)}%</em>
+            </label>
+            <button className="btn ts-test" onClick={() => playChime(tone, volume)}>
+              试听
+            </button>
+          </div>
+
+          <p className="settings-hint">倒计时结束会推送一条站内通知（右上角铃铛）并播放提示音；音色与音量可在此调节，设置会保存在本机。</p>
         </div>
       ) : (
         <div className="timer-body">

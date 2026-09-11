@@ -4,6 +4,8 @@ import {
   Brain,
   Check,
   ChevronDown,
+  ChevronsLeft,
+  ChevronsRight,
   Cloud,
   Copy,
   Cpu,
@@ -12,19 +14,16 @@ import {
   Image as ImageIcon,
   Loader2,
   MessageSquare,
-  PanelRight,
   Paperclip,
   RefreshCw,
-  Settings,
   Square,
   X,
 } from 'lucide-react'
 import { filesApi, sessionApi } from '../api'
-import type { FileInfo, LlmConfigPayload, LlmOption, Message, UserProfile } from '../types'
+import type { FileInfo, LlmConfigPayload, LlmOption, Message } from '../types'
 import MessageBubble from './MessageBubble'
 import NotificationBell from './NotificationBell'
 import CloudConnectModal from './CloudConnectModal'
-import SettingsModal from './SettingsModal'
 import SkillCards from './SkillCards'
 import KbPicker from './KbPicker'
 import ModelPicker from './ModelPicker'
@@ -111,9 +110,6 @@ export default function ChatWindow({
   onSkillsChanged,
   activeKbIds,
   onKbChanged,
-  profile,
-  onProfileUpdate,
-  onLogout,
 }: {
   sessionId: number
   title?: string
@@ -132,12 +128,8 @@ export default function ChatWindow({
   onSkillsChanged: () => void
   activeKbIds: number[]
   onKbChanged: () => void
-  profile: UserProfile | null
-  onProfileUpdate: (p: UserProfile) => void
-  onLogout: () => void
 }) {
   const [showCloud, setShowCloud] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [inputH, setInputH] = useState<number | null>(null) // 手动拖动后的输入框高度（null=自动增高）
@@ -361,6 +353,32 @@ export default function ChatWindow({
                 return c
               })
             }
+            // 给刚生成的这轮问答补上后端 id（done 事件带回 user_id / assistant_id），
+            // 这样不刷新页面也能对刚发的消息点删除；仅补 id 为空的本地消息，不动其它。
+            const uid = data.user_id as number | undefined
+            const aid = data.assistant_id as number | undefined
+            if (uid != null || aid != null) {
+              setMessages((m) => {
+                const c = [...m]
+                if (aid != null) {
+                  for (let k = c.length - 1; k >= 0; k--) {
+                    if (c[k].role === 'assistant') {
+                      if (c[k].id == null) c[k] = { ...c[k], id: aid }
+                      break
+                    }
+                  }
+                }
+                if (uid != null) {
+                  for (let k = c.length - 1; k >= 0; k--) {
+                    if (c[k].role === 'user') {
+                      if (c[k].id == null) c[k] = { ...c[k], id: uid }
+                      break
+                    }
+                  }
+                }
+                return c
+              })
+            }
             onTitleChange()
             onTodoChanged()
           }
@@ -425,6 +443,19 @@ export default function ChatWindow({
     await runStream({ session_id: sessionId, regenerate: true })
   }
 
+  // ---------- 删除单条消息（连同同一轮的另一条）----------
+  const deleteMessage = async (id?: number) => {
+    if (id == null) return
+    if (!confirm('删除这条消息？（同一轮的提问与回答会一起删除）')) return
+    try {
+      const { data } = await sessionApi.removeMessage(sessionId, id)
+      const removed = new Set<number>(data.ids || [id])
+      setMessages((m) => m.filter((x) => !(x.id != null && removed.has(x.id))))
+    } catch (e: any) {
+      alert(`删除失败：${e?.response?.data?.detail || e?.message || e}`)
+    }
+  }
+
   // 点击来源 → 按文件名找到对应文档并打开右侧查看器
   const openSource = async (name: string) => {
     try {
@@ -466,20 +497,12 @@ export default function ChatWindow({
             导出
           </button>
           <button
-            className="topbar-btn"
+            className="panel-toggle"
             onClick={onTogglePanel}
             title={panelOpen ? '收起右侧面板' : '展开右侧面板'}
+            aria-label={panelOpen ? '收起面板' : '展开面板'}
           >
-            <PanelRight size={14} />
-            {panelOpen ? '收起面板' : '展开面板'}
-          </button>
-          <button
-            className="topbar-btn settings-btn"
-            onClick={() => setShowSettings(true)}
-            title="设置"
-            aria-label="设置"
-          >
-            <Settings size={16} />
+            {panelOpen ? <ChevronsRight size={15} /> : <ChevronsLeft size={15} />}
           </button>
         </div>
         <CloudConnectModal
@@ -527,7 +550,11 @@ export default function ChatWindow({
                     ))}
                   </div>
                 )}
-                <MessageBubble role={m.role} content={m.content} />
+                <MessageBubble
+                  role={m.role}
+                  content={m.content}
+                  onDelete={m.id != null && !loading ? () => deleteMessage(m.id) : undefined}
+                />
               </Fragment>
             )
           }
@@ -563,7 +590,12 @@ export default function ChatWindow({
                 )
               ) : (
                 <>
-                  <MessageBubble role={m.role} content={m.content} />
+                  <MessageBubble
+                    role={m.role}
+                    content={m.content}
+                    streaming={streaming}
+                    onDelete={m.id != null && !loading ? () => deleteMessage(m.id) : undefined}
+                  />
                   {m.sources && m.sources.length > 0 && (
                     <div className="msg-sources">
                       <span className="msg-sources-label">来源：</span>
@@ -579,20 +611,22 @@ export default function ChatWindow({
                       ))}
                     </div>
                   )}
-                  <MsgBar
-                    content={m.content}
-                    canRegen={isLast && !loading}
-                    onRegen={regenerate}
-                  />
-                  {m.model && (
-                    <div
-                      className="msg-model"
-                      title={`本条回答由${m.provider === 'cloud' ? '云端' : '本地'}模型 ${m.model} 生成`}
-                    >
-                      {m.provider === 'cloud' ? <Cloud size={11} /> : <Cpu size={11} />}
-                      {m.provider === 'cloud' ? '云端' : '本地'} · {m.model}
-                    </div>
-                  )}
+                  <div className="msg-footer">
+                    {m.model && (
+                      <span
+                        className="msg-model"
+                        title={`本条回答由${m.provider === 'cloud' ? '云端' : '本地'}模型 ${m.model} 生成`}
+                      >
+                        {m.provider === 'cloud' ? <Cloud size={11} /> : <Cpu size={11} />}
+                        {m.provider === 'cloud' ? '云端' : '本地'} · {m.model}
+                      </span>
+                    )}
+                    <MsgBar
+                      content={m.content}
+                      canRegen={isLast && !loading}
+                      onRegen={regenerate}
+                    />
+                  </div>
                 </>
               )}
             </Fragment>
@@ -687,15 +721,6 @@ export default function ChatWindow({
         </div>
         {lastAssistantIsEmpty && <div className="composer-hint">生成中…点「停止」可中断</div>}
       </div>
-
-      <SettingsModal
-        open={showSettings}
-        onClose={() => setShowSettings(false)}
-        profile={profile}
-        onProfileUpdate={onProfileUpdate}
-        onConnectCloud={async () => setShowCloud(true)}
-        onLogout={onLogout}
-      />
 
       {viewing && (
         <DocViewer

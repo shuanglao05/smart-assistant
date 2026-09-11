@@ -1,5 +1,6 @@
 """FastAPI 入口：装配 app、注册路由、CORS、启动建表。"""
 
+import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -19,6 +20,9 @@ from app.todos import router as todos_router
 from app.users import router as users_router
 from app.api_keys import router as api_keys_router
 from app.weather import router as weather_router
+from app.notes import router as notes_router
+from app.schedules import reminder_loop, router as schedules_router
+from app.courses import router as courses_router
 
 
 def _read_version() -> str:
@@ -61,6 +65,15 @@ app.include_router(users_router)
 app.include_router(api_keys_router)
 app.include_router(llm_config_router)
 app.include_router(chat_router)
+app.include_router(notes_router)
+app.include_router(schedules_router)
+app.include_router(courses_router)
+
+
+@app.on_event("startup")
+async def _start_reminder_loop():
+    """启动日程提醒后台协程（每 30 秒检查一次「5 分钟后要开始」的日程）。"""
+    asyncio.create_task(reminder_loop())
 
 
 @app.get("/api/health")

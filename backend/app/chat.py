@@ -24,7 +24,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from sqlalchemy.orm import Session
 
 from app.agent_manager import build_llm, get_agent_for_conversation
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.deps import get_current_user
 from app.files import IMAGE_EXTS, UPLOAD_ROOT
 from app.models import Conversation, FileItem, Message
@@ -167,8 +167,12 @@ def _image_blocks(
 
 def _prepare_conversation(
     db: Session, user_id: int, conv: Conversation, payload: ChatRequest
-) -> str:
-    """写用户消息 / 处理 regenerate，返回要交给模型的问题原文。"""
+) -> tuple[str, int | None]:
+    """写用户消息 / 处理 regenerate，返回 (问题原文, 本条用户消息的 id)。
+
+    返回 user_msg_id 是为了让流式结束事件能把它和助手回答的 id 一起回传前端，
+    前端据此给刚生成的这轮问答补上后端 id（否则新发的消息没有 id，单条删除按钮不会显示）。
+    """
     msg_count = db.query(Message).filter(Message.conversation_id == conv.id).count()
 
     if payload.regenerate:
@@ -186,23 +190,24 @@ def _prepare_conversation(
             Message.role == "assistant",
             Message.id > last_user.id,
         ).delete(synchronize_session=False)
-        return last_user.content
+        return last_user.content, last_user.id
 
     text = (payload.message or "").strip()
     if not text:
         raise HTTPException(400, "消息不能为空")
     ref_ids = payload.file_ids or []
-    db.add(
-        Message(
-            conversation_id=conv.id,
-            role="user",
-            content=text,
-            ref_file_ids=json.dumps(ref_ids) if ref_ids else None,
-        )
+    row = Message(
+        conversation_id=conv.id,
+        role="user",
+        content=text,
+        ref_file_ids=json.dumps(ref_ids) if ref_ids else None,
     )
+    db.add(row)
+    db.flush()  # 拿到刚插入的用户消息 id（不急着 commit，外层统一提交）
+    uid = row.id
     if msg_count == 0 and conv.title == "新对话":
         conv.title = text[:20]
-    return text
+    return text, uid
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -222,7 +227,7 @@ def chat(
     if not conv:
         raise HTTPException(404, "会话不存在")
 
-    question = _prepare_conversation(db, current_user.id, conv, payload)
+    question, _ = _prepare_conversation(db, current_user.id, conv, payload)
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -302,7 +307,7 @@ def chat_stream(
         raise HTTPException(404, "会话不存在")
 
     # regenerate / 普通提问：在此阶段完成落库与校验（HTTPException 才能正确返回）
-    question = _prepare_conversation(db, current_user.id, conv, payload)
+    question, user_msg_id = _prepare_conversation(db, current_user.id, conv, payload)
     image_blocks, image_ids = _image_blocks(db, current_user.id, payload.file_ids)
     context = _attachment_context(db, current_user.id, payload.file_ids, exclude_ids=image_ids)
     agent_input = f"{context}{question}" if context else question
@@ -317,9 +322,66 @@ def chat_stream(
     )
 
     def gen():
-        """生成器函数：被 StreamingResponse 逐段取出，形成 SSE 流式推送。"""
+        """生成器函数：被 StreamingResponse 逐段取出，形成 SSE 流式推送。
+
+        健壮性设计（针对"中途断连"）：
+          不在流结束时才新建助手消息行，而是【一开始就建一条空内容行】，
+          流过程中只在 finally 里更新它的内容。这样即便客户端中途关窗口 / 点停止
+          （Starlette 未必会立刻对 sync 生成器抛 GeneratorExit），这条行已经存在——
+          用户重载会话时能看到"回答中断"状态，而不是一条凭空消失的回答。
+          更新放在 try/finally（含 except GeneratorExit）里，断连时也一定会落库。
+        """
         full: list[str] = []
         splitter = _ThinkSplitter()
+        reply = ""
+
+        # ① 预先建好助手消息行（空内容），记下 id，后续只更新它（避免结尾再新建造成重复）
+        assistant_id = None
+        try:
+            sdb = SessionLocal()
+            row = Message(
+                conversation_id=conv.id,
+                role="assistant",
+                content="",
+                provider=conv.provider,
+                model=conv.model,
+            )
+            sdb.add(row)
+            sdb.commit()
+            sdb.refresh(row)
+            assistant_id = row.id
+            sdb.close()
+        except Exception:
+            assistant_id = None  # 建行失败则降级为「流结束再新建」
+
+        def _save(final_text: str) -> None:
+            """把最终 / 部分内容写回助手消息行（新建或更新都兼容），独立会话避免被回收。"""
+            try:
+                sdb = SessionLocal()
+                try:
+                    if assistant_id is not None:
+                        r = sdb.get(Message, assistant_id)
+                        if r:
+                            r.content = final_text
+                    else:
+                        sdb.add(
+                            Message(
+                                conversation_id=conv.id,
+                                role="assistant",
+                                content=final_text,
+                                provider=conv.provider,
+                                model=conv.model,
+                            )
+                        )
+                    c = sdb.get(Conversation, conv.id)
+                    if c:
+                        c.updated_at = datetime.now(timezone.utc)
+                    sdb.commit()
+                finally:
+                    sdb.close()
+            except Exception:
+                pass
+
         try:
             if image_blocks:
                 # 多模态流式：把"问题 + 图片"直接交给视觉模型逐 token 输出
@@ -378,23 +440,23 @@ def chat_stream(
                     full.append(answer)
                     yield f"data: {json.dumps({'token': answer}, ensure_ascii=False)}\n\n"
             reply = "".join(full) or "（模型没有返回内容）"
+        except GeneratorExit:
+            # 客户端半途断连（关窗口 / 点停止）：保留已生成内容，否则标记中断。
+            # 落库放在 except 内、raise 之前，且直接 re-raise——符合生成器关闭协议，
+            # 不会触发 "generator ignored GeneratorExit" 的 RuntimeError。
+            partial = "".join(full)
+            reply = partial if partial.strip() else "（回答生成已中断）"
+            _save(reply)  # 行早已存在，此处写回部分/中断内容
+            raise
         except Exception as e:
             reply = f"出错了: {e}"
-            yield f"data: {json.dumps({'token': reply}, ensure_ascii=False)}\n\n"
-
-        db.add(
-            Message(
-                conversation_id=conv.id,
-                role="assistant",
-                content=reply,
-                provider=conv.provider,
-                model=conv.model,
-            )
-        )
-        conv.updated_at = datetime.now(timezone.utc)
-        db.commit()
-        # 结束事件顺带带上本次回答所用的模型，前端据此在回答下方标注
-        yield f"data: {json.dumps({'done': True, 'provider': conv.provider, 'model': conv.model}, ensure_ascii=False)}\n\n"
+            _save(reply)
+        else:
+            # 正常结束：把最终内容写回（行早已存在，只更新内容，不会重复建行）
+            _save(reply)
+        # 结束事件顺带带上本次回答所用的模型，以及这轮问答在后端的两行 id，
+        # 前端据此给刚生成的消息补上 id（用于单条删除 / 重载前也能删除）。
+        yield f"data: {json.dumps({'done': True, 'provider': conv.provider, 'model': conv.model, 'user_id': user_msg_id, 'assistant_id': assistant_id}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         gen(),

@@ -36,8 +36,20 @@
 - **待办**：自然语言记录，面板勾选 / 删除 / 看进度
 - **站内提醒**：AI 把提醒推进右上角**通知中心**（铃铛红点）
 - **技能（Skills）**：一段指令即一套人设，**勾选即生效**；支持新建 / 编辑 / 删除 / 导入 `.md` 或整个技能文件夹
-- **功能页**：天气、技能、待办、计时器、日历
 - **跨会话历史搜索**、**导出会话为 Markdown**
+
+### 功能页
+默认顺序：**对话 → 技能 → 知识库 → 笔记 → 日程 → 课表 → 天气 → 待办 → 计时器 → 日历**（可在右侧功能栏拖拽调整）
+
+| 功能页 | 说明 |
+|---|---|
+| 智能笔记 | 按日期分组的 Markdown 笔记，支持编辑 / 预览切换、AI 归纳要点、导出 6 种格式（`md/txt/html/pdf/doc/json`） |
+| 日程规划 | 添加日程，**开始前 5 分钟**由后端后台协程自动推送站内通知 |
+| 课表 | 节次 × 星期表格；支持**智能导入**（粘贴文本 / 网址 / **截图识别**）、按周次过滤（`1-16`、`1,3,5-8`、`1-16单周`）；格子尺寸可拖滑杆自由调节 |
+| 天气 | 中文城市名查询（高德优先、OpenWeatherMap 备用） |
+| 待办 | 自然语言记录，勾选 / 删除 / 看进度 |
+| 计时器 | 倒计时 + 秒表；倒计时结束推送通知并响铃，**提示音可选 6 种音色、音量可调** |
+| 日历 | 月视图备忘（存本机 **localStorage**）；**公历 + 农历节日标注**（春节 / 端午 / 中秋…）；格子尺寸可调节 |
 
 ### 界面
 - 双主题（浅色 / 深色）、字号三档（小 / 中 / 大）、中英文切换
@@ -49,7 +61,7 @@
 
 | 层 | 选型 |
 |---|---|
-| 前端 | React 18 + TypeScript + Vite + lucide-react |
+| 前端 | React 18 + TypeScript + Vite + lucide-react + mermaid（图表渲染） |
 | 后端 | FastAPI + SQLAlchemy + SQLite |
 | AI 层 | LangChain + LangGraph（`create_react_agent`） |
 | 模型 | Ollama（本地，`ChatOllama`）/ 任意 OpenAI 兼容平台（`ChatOpenAI`） |
@@ -127,6 +139,9 @@ CLOUD_MODEL=qwen-plus
 # 界面「切换模型」下拉里的云端模型清单（逗号分隔）
 CLOUD_MODELS=qwen3.8-max,qwen-max,qwen-plus,qwen-flash,deepseek-v3.2,glm-5.2,kimi-k3,qwen3-vl-plus
 
+# 多模态视觉模型（图片识别 / 课表截图导入），必须支持图片输入
+VISION_MODEL=qwen3-vl-plus
+
 # ---------- RAG 知识库 ----------
 EMBED_PROVIDER=ollama
 EMBED_MODEL=bge-m3
@@ -173,6 +188,9 @@ smart-assistant/
 │   │   ├── weather.py         天气接口
 │   │   ├── search.py          跨会话历史搜索
 │   │   ├── llm_config.py      运行时切换 / 配置云端模型
+│   │   ├── notes.py           智能笔记 CRUD + AI 归纳（/summarize）
+│   │   ├── schedules.py       日程 CRUD + 后台提醒协程
+│   │   ├── courses.py         课表 CRUD + 智能导入（/import，支持图片）
 │   │   └── api_keys.py        当前 API 配置（Key 脱敏）
 │   ├── requirements.txt
 │   ├── .env.example           ← 配置模板（真实 .env 不入库）
@@ -180,18 +198,30 @@ smart-assistant/
 ├── frontend/
 │   ├── src/
 │   │   ├── api/               axios 实例 + 接口封装
-│   │   ├── components/        布局与组件（ChatWindow/ModelPicker/KbGraph/…）
-│   │   ├── pages/             功能页（天气/技能/待办/计时器/日历/知识库）
+│   │   ├── components/        布局与组件（ChatWindow/ModelPicker/KbGraph/GridZoom…）
+│   │   ├── pages/             功能页（笔记/日程/课表/天气/技能/待办/计时器/日历/知识库）
+│   │   ├── chime.ts           提示音合成（Web Audio，6 种音色）
+│   │   ├── globalModel.ts     全局模型选择（localStorage + 事件同步）
+│   │   ├── toast.ts           全局轻提示
 │   │   ├── types.ts           全局类型
 │   │   └── styles.css         全局样式（CSS 变量 + 双主题）
 │   ├── package.json
 │   └── vite.config.ts         /api 代理到后端
+├── docs/                      文档（安装指南 / 结构解析 / 分享介绍 / 详细开发文档）
 ├── start.bat                  Windows 一键启动
-├── README.md
-├── 安装指南_环境准备.md
-├── 项目结构清单与框架解析.md
-└── 项目分享介绍.md
+└── README.md
 ```
+
+---
+
+## 文档导航
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/安装指南_环境准备.md`](docs/安装指南_环境准备.md) | 环境准备（Python / Node / Ollama）详细步骤与常见坑 |
+| [`docs/项目结构清单与框架解析.md`](docs/项目结构清单与框架解析.md) | 逐文件说明 + LangChain / LangGraph 与 RAG 原理剖析 |
+| [`docs/项目分享介绍.md`](docs/项目分享介绍.md) | 答辩 / 分享用的精简介绍 |
+| [`docs/开发文档_详细版.md`](docs/开发文档_详细版.md) | 需求 / 设计 / 接口 / 测试 / 排障 / 更新记录（含 v1.1、v1.2） |
 
 ---
 
@@ -207,7 +237,7 @@ smart-assistant/
 | 多用户隔离 | 工厂函数 `make_xxx_tools(user_id)` + 查询恒带 `user_id` | 工具/查询都绑定当前用户 |
 | 向量检索 | 纯 Python 余弦相似度 | 免装向量数据库，SQLite 存向量即可；数据量大时可换 FAISS / Chroma |
 | 思考过程 | 后端流式剥离 ` thinking…` / 转发 `reasoning_content` | 思考与正文分离展示，不污染回答 |
-| 知识库上限 | 单文档 ≤ **20 万字符**、单文件 ≤ 8MB | 超长文档请切卷上传（见 `项目结构清单` 说明） |
+| 知识库上限 | 单文档 ≤ **20 万字符**、单文件 ≤ 8MB | 超长文档请切卷上传（见 `docs/项目结构清单与框架解析.md`） |
 
 ---
 
@@ -250,3 +280,24 @@ smart-assistant/
 - 数据库 `backend/app.db`、用户上传 `backend/uploads/` 同样被忽略，**不会上传到仓库**。
 - `frontend/.env`、`*.log`、`node_modules/`、`venv/`、`dist/` 均不参与提交。
 - 想清空所有本地数据：删除 `backend/app.db` 与 `backend/uploads/` 即可（重启后端会重新建表）。
+- 日历备忘、功能页尺寸等偏好存在**浏览器 localStorage**（不上传服务器，换设备不同步）。
+
+### 开源前自查清单（重要）
+
+推送到公开仓库前，请逐项确认：
+
+1. **`.env` 从未入库**
+   ```bash
+   git ls-files | grep -i "\.env"      # 只应看到 .env.example
+   git log --all --full-history -- backend/.env   # 历史里也应为空
+   ```
+2. **改掉默认 `SECRET_KEY`**：`python -c "import secrets;print(secrets.token_urlsafe(32))"`，
+   否则任何人都能伪造 JWT 登录。
+3. **提交邮箱会永久公开**：GitHub 会展示每次提交的 `user.email`。
+   不想暴露真实邮箱就用 [GitHub noreply 邮箱](https://docs.github.com/account-and-profile/setting-up-and-managing-your-personal-account-on-github/managing-email-preferences/setting-your-commit-email-address)：
+   ```bash
+   git config user.email "<你的ID>+<用户名>@users.noreply.github.com"
+   ```
+   注意：这**只影响之后的提交**；已推送历史里的邮箱需要用 `git filter-repo` 重写并强推才能清除。
+4. **扫描密钥**：`git ls-files -z | xargs -0 grep -nIE "(sk-[A-Za-z0-9]{16,}|api[_-]?key\s*[:=]\s*[\"'][^\"']{8,})"`
+5. **确认无个人隐私**：学号 / 姓名 / 手机号等不要写进文档或注释。

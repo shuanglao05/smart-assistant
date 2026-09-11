@@ -43,6 +43,9 @@ CLOUD_API_KEY = os.getenv("CLOUD_API_KEY", "")
 CLOUD_BASE_URL = os.getenv("CLOUD_BASE_URL", "").strip() or None
 CLOUD_MODEL = os.getenv("CLOUD_MODEL", "gpt-4o-mini")
 
+# 视觉模型：用于「课表截图识别」等多模态任务（走云端 OpenAI 兼容端点）
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl-plus")
+
 
 def parse_model_list(raw: str | None) -> list[str]:
     """把 'a,b\\nc' 这类文本解析成去重、去空的模型名列表。"""
@@ -137,5 +140,7 @@ SYSTEM_PROMPT = (
     "- 需要给用户发站内提醒/通知（铃铛）：用 notify_user（title 简短，如《记得喝水》）\n"
     "- 需要查互联网资料：用 search_web\n"
     "- 需要查用户自己上传的资料/知识库（笔记、报告、说明书、规范等）：用 search_knowledge_base\n"
+    "- 需要画流程图/时序图/关系图，或柱状图/折线图等图表：用 ```mermaid 代码块输出"
+    "（流程图 graph TD/LR，时序图 sequenceDiagram，柱状图/折线图 xychart-beta），不要用文字描述图形。\n"
     "回答使用简体中文，保持简洁，不要复述工具返回的原始数据。"
 )

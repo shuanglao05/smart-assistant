@@ -2,6 +2,7 @@ import client from './client'
 import type {
   ApiKeyInfo,
   AuthResult,
+  Course,
   FileDetail,
   FileInfo,
   KbCollection,
@@ -10,7 +11,10 @@ import type {
   LlmConfigPayload,
   LlmOption,
   Message,
+  Note,
   NotificationItem,
+  ParsedCourse,
+  Schedule,
   SearchHit,
   Session,
   Skill,
@@ -43,6 +47,9 @@ export const sessionApi = {
     }
   ) => client.patch<Session>(`/sessions/${id}`, data),
   remove: (id: number) => client.delete(`/sessions/${id}`),
+  removeMessage: (sessionId: number, messageId: number) =>
+    client.delete(`/sessions/${sessionId}/messages/${messageId}`),
+  clearAll: () => client.delete(`/sessions`),
 }
 
 export const llmApi = {
@@ -68,6 +75,54 @@ export const todoApi = {
   update: (id: number, data: { done?: boolean; task?: string }) =>
     client.patch<Todo>(`/todos/${id}`, data),
   remove: (id: number) => client.delete(`/todos/${id}`),
+}
+
+export const notesApi = {
+  list: () => client.get<Note[]>('/notes'),
+  create: (data: { title?: string; content?: string; day?: string }) =>
+    client.post<Note>('/notes', data),
+  update: (id: number, data: { title?: string; content?: string; day?: string }) =>
+    client.patch<Note>(`/notes/${id}`, data),
+  remove: (id: number) => client.delete(`/notes/${id}`),
+  summarize: (day: string, provider?: string, model?: string) =>
+    client.post<{ day: string; summary: string; count: number }>('/notes/summarize', {
+      day,
+      provider,
+      model,
+    }),
+}
+
+export const schedulesApi = {
+  list: () => client.get<Schedule[]>('/schedules'),
+  create: (data: { title: string; start_at: number; note?: string }) =>
+    client.post<Schedule>('/schedules', data),
+  update: (id: number, data: { title?: string; start_at?: number; note?: string }) =>
+    client.patch<Schedule>(`/schedules/${id}`, data),
+  remove: (id: number) => client.delete(`/schedules/${id}`),
+}
+
+export const coursesApi = {
+  list: () => client.get<Course[]>('/courses'),
+  create: (data: {
+    name: string
+    weekday: number
+    start_section: number
+    end_section: number
+    teacher?: string
+    location?: string
+    weeks?: string
+    color?: string
+  }) => client.post<Course>('/courses', data),
+  update: (id: number, data: Partial<Course>) => client.patch<Course>(`/courses/${id}`, data),
+  remove: (id: number) => client.delete(`/courses/${id}`),
+  // 智能导入：给网址 / 粘贴文本 / 课表截图，由 AI 解析成课程草稿（不落库）
+  import: (data: {
+    url?: string
+    text?: string
+    image?: string
+    provider?: string
+    model?: string
+  }) => client.post<{ count: number; courses: ParsedCourse[] }>('/courses/import', data),
 }
 
 export const weatherApi = {

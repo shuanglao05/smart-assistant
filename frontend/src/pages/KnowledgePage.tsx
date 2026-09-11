@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   BookOpen,
+  Database,
   FileText,
   FolderPlus,
   List,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react'
 import { filesApi, kbApi } from '../api'
 import PageShell from '../components/PageShell'
+import EngineChip from '../components/EngineChip'
 import KbGraph from '../components/KbGraph'
 import type { KbCollection, KbDocument } from '../types'
 
@@ -157,6 +159,14 @@ export default function KnowledgePage() {
     <PageShell
       icon={<BookOpen size={18} />}
       title="知识库"
+      model={
+        <EngineChip
+          icon={<Database size={14} />}
+          label="bge-m3"
+          sub="本地嵌入"
+          title="知识库向量化使用本地 Ollama 的 bge-m3 嵌入模型，并非对话大模型"
+        />
+      }
       actions={
         <>
           <button

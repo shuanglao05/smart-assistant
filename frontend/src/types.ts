@@ -25,6 +25,7 @@ export interface LlmConfigPayload {
 }
 
 export interface Message {
+  id?: number
   role: 'user' | 'assistant'
   content: string
   created_at: string
@@ -86,6 +87,48 @@ export interface Todo {
   task: string
   done: boolean
   created_at: string
+}
+
+export interface Note {
+  id: number
+  title: string
+  content: string
+  day: string // YYYY-MM-DD
+  created_at: string
+  updated_at: string
+}
+
+export interface Schedule {
+  id: number
+  title: string
+  start_at: number // epoch 秒
+  note?: string | null
+  reminded: boolean
+  created_at: string
+}
+
+export interface Course {
+  id: number
+  name: string
+  teacher?: string | null
+  location?: string | null
+  weekday: number // 1=周一 … 7=周日
+  start_section: number
+  end_section: number
+  weeks?: string | null
+  color?: string | null
+  created_at: string
+}
+
+/** AI 解析出的课程草稿（尚未入库） */
+export interface ParsedCourse {
+  name: string
+  teacher?: string | null
+  location?: string | null
+  weekday: number
+  start_section: number
+  end_section: number
+  weeks?: string | null
 }
 
 export interface AuthResult {

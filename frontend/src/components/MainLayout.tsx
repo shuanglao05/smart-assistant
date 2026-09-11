@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { llmApi, sessionApi } from '../api'
+import { getGlobalModel, setGlobalModel } from '../globalModel'
 import type { LlmConfigPayload, LlmOption, Session, UserProfile } from '../types'
 import SessionList from './SessionList'
 import ChatWindow from './ChatWindow'
 import FunctionPanel from './FunctionPanel'
+import SettingsModal from './SettingsModal'
+import CloudConnectModal from './CloudConnectModal'
 import WeatherPage from '../pages/WeatherPage'
 import SkillsPage from '../pages/SkillsPage'
 import TodosPage from '../pages/TodosPage'
 import TimerPage from '../pages/TimerPage'
 import CalendarPage from '../pages/CalendarPage'
 import KnowledgePage from '../pages/KnowledgePage'
+import NotesPage from '../pages/NotesPage'
+import SchedulePage from '../pages/SchedulePage'
+import TimetablePage from '../pages/TimetablePage'
 
 /** 登录后主布局：左=会话列表，中=路由内容（对话/功能页），右=功能入口 */
 export default function MainLayout({
@@ -31,6 +37,9 @@ export default function MainLayout({
   const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem('panelWidth')) || 320)
   const [incomingText, setIncomingText] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // 设置 / 云端接入弹窗提升到主布局：入口在左下角（退出登录旁），任意功能页都能打开
+  const [showSettings, setShowSettings] = useState(false)
+  const [showCloud, setShowCloud] = useState(false)
   const toastTimer = useRef<number | null>(null)
 
   // 全局轻提示（模型切换等操作反馈）
@@ -112,10 +121,47 @@ export default function MainLayout({
     }
   }, [sessions, currentId])
 
+  // 全局模型 ↔ 当前会话同步：改一处、另一处跟随，保证聊天与各功能用同一个模型
+  const sessionsRef = useRef(sessions)
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
+
+  useEffect(() => {
+    const onGlobal = () => {
+      const g = getGlobalModel()
+      if (!g || currentId == null) return
+      const cur = sessionsRef.current.find((s) => s.id === currentId)
+      if (cur && cur.provider === g.provider && cur.model === g.model) return
+      sessionApi
+        .update(currentId, { provider: g.provider, model: g.model })
+        .then(({ data }) => setSessions((p) => p.map((s) => (s.id === currentId ? data : s))))
+        .catch(() => {})
+    }
+    window.addEventListener('global-model-change', onGlobal)
+    return () => window.removeEventListener('global-model-change', onGlobal)
+  }, [currentId])
+
+  // 首次：若还没设过全局模型，用当前会话的模型初始化
+  useEffect(() => {
+    const cur = sessions.find((s) => s.id === currentId)
+    if (cur && cur.provider && cur.model && !getGlobalModel()) {
+      setGlobalModel(cur.provider, cur.model)
+    }
+  }, [sessions, currentId])
+
   const handleDelete = async (id: number) => {
     await sessionApi.remove(id)
     const list = await refresh()
     if (currentId === id) setCurrentId(list.length > 0 ? list[0].id : null)
+  }
+
+  // 批量清空全部历史会话：删库 + 清记忆/缓存，再刷新列表并重置当前会话
+  const handleClearAll = async () => {
+    await sessionApi.clearAll()
+    const list = await refresh()
+    setCurrentId(list.length > 0 ? list[0].id : null)
+    showToast('已清空全部历史会话')
   }
 
   const handleModelChange = async (provider: string, model: string) => {
@@ -123,6 +169,7 @@ export default function MainLayout({
     try {
       const { data } = await sessionApi.update(currentId, { provider, model })
       setSessions((prev) => prev.map((s) => (s.id === currentId ? data : s)))
+      setGlobalModel(provider, model) // 聊天里换模型 = 换全局模型，功能页跟着用
       // 切换成功不再弹提示：每条回答下方会标注所用模型，不额外打扰；仅失败时提示
     } catch (e: any) {
       showToast(`切换失败：${e?.response?.data?.detail || e?.message || e}`)
@@ -187,6 +234,12 @@ export default function MainLayout({
         return <CalendarPage />
       case '/knowledge':
         return <KnowledgePage />
+      case '/notes':
+        return <NotesPage />
+      case '/schedule':
+        return <SchedulePage />
+      case '/timetable':
+        return <TimetablePage />
       default:
         return current ? (
           <ChatWindow
@@ -208,9 +261,6 @@ export default function MainLayout({
             onSkillsChanged={refresh}
             activeKbIds={current.active_kb_ids || []}
             onKbChanged={refresh}
-            profile={profile}
-            onProfileUpdate={onProfileUpdate}
-            onLogout={onLogout}
           />
         ) : (
           <div className="chat-empty">
@@ -244,6 +294,8 @@ export default function MainLayout({
         }}
         onDelete={handleDelete}
         onRename={handleRename}
+        onClearAll={handleClearAll}
+        onOpenSettings={() => setShowSettings(true)}
         onLogout={onLogout}
         profile={profile}
       />
@@ -255,6 +307,21 @@ export default function MainLayout({
         </>
       )}
       {toast && <div className="app-toast">{toast}</div>}
+
+      <SettingsModal
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        profile={profile}
+        onProfileUpdate={onProfileUpdate}
+        onConnectCloud={() => setShowCloud(true)}
+        onLogout={onLogout}
+      />
+      <CloudConnectModal
+        open={showCloud}
+        onClose={() => setShowCloud(false)}
+        onSubmit={handleConnectCloud}
+        options={options}
+      />
     </div>
   )
 }

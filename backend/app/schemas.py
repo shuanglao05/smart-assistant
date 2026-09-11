@@ -91,6 +91,7 @@ class SessionUpdate(BaseModel):
 
 
 class MessageOut(BaseModel):
+    id: int
     role: str
     content: str
     created_at: datetime
@@ -252,3 +253,105 @@ class SkillOut(BaseModel):
     is_enabled: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------- 智能笔记
+class NoteCreate(BaseModel):
+    title: str = Field(default="", max_length=200)
+    content: str = ""
+    day: str | None = None  # YYYY-MM-DD，缺省=今天
+
+
+class NoteUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = None
+    day: str | None = None
+
+
+class NoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    content: str
+    day: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class NoteSummarizeRequest(BaseModel):
+    day: str  # 要归纳的日期 YYYY-MM-DD
+    provider: str | None = None  # 可选：前端传入的全局模型
+    model: str | None = None
+
+
+# ---------------------------------------------------------------- 日程
+class ScheduleCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    start_at: float  # epoch 秒（UTC）
+    note: str | None = None
+
+
+class ScheduleUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    start_at: float | None = None
+    note: str | None = None
+
+
+class ScheduleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    start_at: float
+    note: str | None = None
+    reminded: bool
+    created_at: datetime
+
+
+# ---------------------------------------------------------------- 课表
+class CourseCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    teacher: str | None = Field(default=None, max_length=100)
+    location: str | None = Field(default=None, max_length=100)
+    weekday: int = Field(ge=1, le=7)
+    start_section: int = Field(ge=1)
+    end_section: int = Field(ge=1)
+    weeks: str | None = Field(default=None, max_length=50)
+    color: str | None = None
+
+
+class CourseUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=100)
+    teacher: str | None = None
+    location: str | None = None
+    weekday: int | None = Field(default=None, ge=1, le=7)
+    start_section: int | None = Field(default=None, ge=1)
+    end_section: int | None = Field(default=None, ge=1)
+    weeks: str | None = None
+    color: str | None = None
+
+
+class CourseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    teacher: str | None = None
+    location: str | None = None
+    weekday: int
+    start_section: int
+    end_section: int
+    weeks: str | None = None
+    color: str | None = None
+    created_at: datetime
+
+
+class CourseImportRequest(BaseModel):
+    """智能导入：给网址、粘贴文本或课表截图，由 AI 解析成课程列表。"""
+
+    url: str | None = None
+    text: str | None = None
+    image: str | None = None  # 图片 data URL（data:image/png;base64,...）
+    provider: str | None = None  # 可选：前端传入的全局模型
+    model: str | None = None
