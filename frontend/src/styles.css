@@ -2508,11 +2508,271 @@ html[data-fs='large'] {
   font-weight: 500;
 }
 
-.settings-api-actions {
+/* API 管理：ChatBox 式双栏（左服务列表 + 右明细表单） */
+.settings-modal-api {
+  width: 700px;
+}
+
+.api-grid {
   display: flex;
+  gap: 14px;
+  align-items: stretch;
+  min-height: 380px;
+}
+
+.api-nav {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+}
+
+.api-nav-group {
+  font-size: calc(1rem * 11 / 14);
+  color: var(--ink-dim);
+  padding: 2px 8px 6px;
+  letter-spacing: 0.05em;
+}
+
+.api-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: calc(1rem * 12.5 / 14);
+  font-family: inherit;
+  padding: 9px 8px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.api-nav-item:hover {
+  background: var(--panel-3);
+  color: var(--ink);
+}
+
+.api-nav-item.on {
+  background: var(--brand-tint);
+  color: var(--brand);
+  font-weight: 500;
+}
+
+.api-nav-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.api-nav-ok {
+  color: var(--ok);
+  flex-shrink: 0;
+}
+
+.api-nav-badge {
+  font-size: calc(1rem * 10.5 / 14);
+  color: var(--warn);
+  flex-shrink: 0;
+}
+
+.api-nav-hint {
+  margin-top: auto;
+  padding: 8px 6px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.api-detail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.api-detail-head {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 4px;
   flex-wrap: wrap;
+}
+
+.api-detail-title {
+  font-size: calc(1rem * 15 / 14);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.check-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(1rem * 11 / 14);
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: var(--panel-2);
+  max-width: 100%;
+}
+
+.check-badge.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+
+.check-badge.err {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.api-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.api-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.api-detail textarea.input {
+  resize: vertical;
+  font-family: var(--mono);
+  line-height: 1.5;
+}
+
+/* 深度思考开关行（设置 → API 管理 → 云端 API） */
+.api-think-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+}
+
+.api-think-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.api-think-text .modal-label {
+  margin-top: 0;
+}
+
+.llm-switch {
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: var(--panel-3);
+  border: 1px solid var(--line);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s;
+  padding: 0;
+}
+
+.llm-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  transition: transform 0.18s, background 0.18s;
+}
+
+.llm-switch.on {
+  background: var(--brand-tint);
+  border-color: var(--brand);
+}
+
+.llm-switch.on .llm-switch-knob {
+  transform: translateX(18px);
+  background: var(--brand);
+}
+
+.llm-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.api-sub-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: -4px;
+  padding-left: 2px;
+}
+
+/* 代理地址一行：输入框占满，按钮固定宽度 */
+.api-sub-field .settings-row-inline .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.api-sub-field .settings-row-inline .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.preset-chip.active {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-tint);
+  font-weight: 500;
+}
+
+.api-sub-field code {
+  background: var(--panel-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: calc(1rem * 11 / 14);
+  font-family: var(--mono);
+}
+
+.api-tag-muted {
+  margin-left: 6px;
+  font-size: calc(1rem * 10.5 / 14);
+  font-weight: 400;
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+
+.api-check-info {
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  word-break: break-all;
 }
 
 /* 头像网格 */
@@ -3176,6 +3436,87 @@ html[data-fs='large'] {
   background: var(--brand-ink);
 }
 
+/* ---- 放假 / 调休补班 角标（数据来自国务院放假安排）---- */
+.cal-tag {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: calc(1rem * 9.5 / 14);
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* 休：放假（红底白字，符合中文日历习惯） */
+.cal-tag.off {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* 班：调休补班（中性灰底） */
+.cal-tag.work {
+  background: var(--panel-3);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+
+/* 选中态下角标保持可读 */
+.cal-cell.sel .cal-tag.work {
+  background: var(--brand-ink);
+  color: var(--brand);
+  border-color: transparent;
+}
+
+.cal-cell.sel .cal-tag.off {
+  background: #fff;
+  color: var(--danger);
+}
+
+/* 放假日的日期数字略微强调 */
+.cal-cell.is-off .cal-day {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.cal-cell.sel .cal-day {
+  color: var(--brand-ink);
+}
+
+.cal-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  font-size: calc(1rem * 11.5 / 14);
+  color: var(--ink-soft);
+}
+
+.cal-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 图例里的角标恢复为静态布局（不绝对定位） */
+.cal-legend-item .cal-tag {
+  position: static;
+  top: auto;
+  right: auto;
+}
+
+.cal-legend-hint {
+  margin-left: auto;
+  font-size: calc(1rem * 11 / 14);
+  color: var(--ink-dim);
+}
+
 .cal-fest {
   position: absolute;
   top: 2px;
@@ -3643,6 +3984,113 @@ html[data-fs='large'] {
   transform: translate(-50%, 8px);
 }
 
+/* ---------------- 知识库：上传限制 / 检索参数说明条 ---------------- */
+.kb-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-2);
+  font-size: calc(1rem * 12 / 14);
+  color: var(--ink-soft);
+}
+
+.kb-info-ico {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.kb-info-text {
+  min-width: 0;
+}
+
+.kb-info-text b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.kb-topk {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: var(--ink-soft);
+}
+
+.kb-topk-select {
+  font-family: inherit;
+  font-size: calc(1rem * 12 / 14);
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-3);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.kb-info-toggle {
+  border: none;
+  background: transparent;
+  color: var(--brand);
+  font-family: inherit;
+  font-size: calc(1rem * 11.5 / 14);
+  cursor: pointer;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+
+.kb-info-toggle:hover {
+  text-decoration: underline;
+}
+
+.kb-tips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: -6px 0 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  font-size: calc(1rem * 11.5 / 14);
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.kb-tips b {
+  color: var(--ink);
+}
+
+/* 详细说明里的「全局默认 Top-K」一行 */
+.kb-global-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+
+.kb-tips-legend {
+  font-size: calc(1rem * 11 / 14);
+  color: var(--ink-dim);
+}
+
+/* 库列表里标记"该库单独设了 Top-K" */
+.kb-badge.topk {
+  margin-left: 6px;
+  color: var(--brand);
+  background: var(--brand-tint);
+  border-color: transparent;
+  font-weight: 600;
+  cursor: help;
+}
+
 /* ---------------- 知识库：多库布局（左库列表 + 右文档） ---------------- */
 .kb-layout {
   display: grid;
@@ -3916,26 +4364,7 @@ html[data-fs='large'] {
   color: var(--brand);
   flex-shrink: 0;
 }
-.mp-manage {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 8px 9px;
-  font-family: inherit;
-  font-size: calc(1rem * 12 / 14);
-  color: var(--ink-soft);
-  background: transparent;
-  border: none;
-  border-top: 1px solid var(--line-soft);
-  cursor: pointer;
-  text-align: left;
-}
-.mp-manage:hover {
-  color: var(--brand);
-}
-
-/* 接入弹窗里的「拉取模型」行 + 弹窗允许滚动 */
+/* 「拉取模型」行（设置 → API 管理）+ 弹窗允许滚动 */
 .mp-fetch-row {
   display: flex;
   align-items: center;

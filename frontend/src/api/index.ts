@@ -55,11 +55,35 @@ export const sessionApi = {
 export const llmApi = {
   options: () => client.get<LlmOption[]>('/llm-options'),
   configure: (data: LlmConfigPayload) => client.post<LlmOption[]>('/llm-config', data),
-  getConfig: () =>
-    client.get<{ cloud_base_url: string; cloud_model: string; cloud_models: string[] }>(
-      '/llm-config'
+  // 连通性检查：恒 200，{ ok, message }；Key 留空时后端用已保存的 Key 测
+  testConfig: (data: { cloud_api_key?: string; cloud_base_url?: string; cloud_model?: string }) =>
+    client.post<{ ok: boolean; message: string; thinking_supported?: boolean }>(
+      '/llm-config/test',
+      data
     ),
+  getConfig: () =>
+    client.get<{
+      cloud_base_url: string
+      cloud_model: string
+      cloud_models: string[]
+      enable_thinking: boolean
+      thinking_budget: number
+      supports_thinking: boolean
+      trust_env: boolean
+      proxy_url: string
+      env_proxy: string
+      effective_proxy: string
+    }>('/llm-config'),
   fetchModels: () => client.get<{ models: string[] }>('/llm-config/models'),
+  // 扫描本机可用代理（直连慢 / 代理端口变化时用）
+  detectProxy: () =>
+    client.post<{
+      candidates: string[]
+      target: string
+      current: string
+      env_proxy: string
+      effective: string
+    }>('/llm-config/detect-proxy'),
   saveModels: (models: string[]) =>
     client.post<LlmOption[]>('/llm-config/models', { cloud_models: models }),
 }
@@ -132,6 +156,23 @@ export const weatherApi = {
     }),
 }
 
+/** 节假日：放假 / 调休补班安排（数据源 timor.tech，后端缓存） */
+export interface HolidayDay {
+  off: boolean // 放假（显示「休」）
+  work: boolean // 调休补班（显示「班」）
+  name: string // 节日名或「某某补班」
+  wage: number // 薪资倍数：3=法定核心日、2=假期其余天、1=补班
+}
+
+export const calendarApi = {
+  holidays: (year: number) =>
+    client.get<{
+      year: number
+      source: 'cache' | 'timor' | 'unavailable'
+      days: Record<string, HolidayDay>
+    }>('/calendar/holidays', { params: { year } }),
+}
+
 export const skillsApi = {
   list: () => client.get<Skill[]>('/skills'),
   create: (data: SkillCreate) => client.post<Skill>('/skills', data),
@@ -139,7 +180,20 @@ export const skillsApi = {
   remove: (id: number) => client.delete(`/skills/${id}`),
 }
 
+/** 上传限制说明（由后端返回，避免前后端各写一份导致不一致） */
+export interface FileLimits {
+  max_mb: number
+  max_content_chars: number
+  groups: { label: string; exts: string[] }[]
+  all_exts: string[]
+  top_k: number
+  chunk_size: number
+  chunk_overlap: number
+}
+
 export const filesApi = {
+  // 支持的文件类型与大小上限（供界面标注）
+  limits: () => client.get<FileLimits>('/files/limits'),
   upload: (file: File, collectionId?: number) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -155,8 +209,11 @@ export const filesApi = {
 export const kbApi = {
   collections: () => client.get<KbCollection[]>('/kb/collections'),
   createCollection: (name: string) => client.post<KbCollection>('/kb/collections', { name }),
-  renameCollection: (id: number, name: string) =>
-    client.patch<KbCollection>(`/kb/collections/${id}`, { name }),
+  // 更新知识库：改名 / 设置该库专属 Top-K（top_k=null 表示回退跟随全局默认）
+  updateCollection: (
+    id: number,
+    payload: { name?: string; top_k?: number | null }
+  ) => client.patch<KbCollection>(`/kb/collections/${id}`, payload),
   removeCollection: (id: number) => client.delete<{ ok: boolean }>(`/kb/collections/${id}`),
   documents: (collectionId?: number) =>
     client.get<KbDocument[]>(
@@ -167,6 +224,15 @@ export const kbApi = {
     client.get<KbGraph>('/kb/graph', { params: { collection_id: collectionId } }),
   reindexAll: () =>
     client.post<{ indexed: number; failed: number; total: number }>('/kb/reindex-all'),
+  // RAG 检索参数（Top-K / 切片），展示与调整
+  ragConfig: () =>
+    client.get<{
+      top_k: number
+      chunk_size: number
+      chunk_overlap: number
+      embed_batch: number
+    }>('/kb/rag-config'),
+  setRagConfig: (top_k: number) => client.post<{ top_k: number }>('/kb/rag-config', { top_k }),
 }
 
 export const searchApi = {

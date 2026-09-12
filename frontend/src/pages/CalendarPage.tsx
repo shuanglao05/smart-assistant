@@ -1,7 +1,8 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { CalendarDays } from 'lucide-react'
 import PageShell from '../components/PageShell'
 import GridZoom from '../components/GridZoom'
+import { calendarApi, type HolidayDay } from '../api'
 
 const WEEK = ['一', '二', '三', '四', '五', '六', '日']
 const STORE_KEY = 'calendar.memos'
@@ -16,6 +17,8 @@ function loadCell(): number {
 }
 
 // 公历固定节日（key 为 月-日，月份从 1 开始）
+// 注意：这里只放「节日当天」。像国庆 10/2、10/3 属于假期但不是节日本身，
+// 它们由后端返回的放假安排标成「休」，不再重复标注节日名。
 const SOLAR_FESTIVALS: Record<string, string> = {
   '1-1': '元旦',
   '2-14': '情人节',
@@ -29,8 +32,6 @@ const SOLAR_FESTIVALS: Record<string, string> = {
   '8-1': '建军节',
   '9-10': '教师节',
   '10-1': '国庆节',
-  '10-2': '国庆节',
-  '10-3': '国庆节',
   '12-24': '平安夜',
   '12-25': '圣诞节',
 }
@@ -95,6 +96,24 @@ export default function CalendarPage() {
   const [memos, setMemos] = useState<Record<string, string>>(loadMemos)
   const [draft, setDraft] = useState(() => loadMemos()[ymd(today.getFullYear(), today.getMonth(), today.getDate())] || '')
   const [cell, setCell] = useState<number>(loadCell)
+  // 当年放假 / 调休补班安排（来自后端，数据源 timor.tech）
+  const [holidays, setHolidays] = useState<Record<string, HolidayDay>>({})
+
+  // 拉取当年节假日安排：年份切换时才重新请求（后端有磁盘缓存，很快）
+  useEffect(() => {
+    let cancelled = false
+    calendarApi
+      .holidays(year)
+      .then(({ data }) => {
+        if (!cancelled) setHolidays(data.days || {})
+      })
+      .catch(() => {
+        if (!cancelled) setHolidays({}) // 拉取失败不影响日历本身
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [year])
 
   const changeCell = (v: number) => {
     setCell(v)
@@ -193,12 +212,25 @@ export default function CalendarPage() {
             const isSel = key === selected
             const weekend = (new Date(year, month, d).getDay() + 6) % 7 >= 5
             const fest = festivalOf(year, month, d)
+            const hd = holidays[key]
+            const off = hd?.off === true // 放假 → 「休」
+            const work = hd?.work === true // 调休补班 → 「班」
             return (
               <button
                 key={key}
-                className={`cal-cell ${isToday ? 'today' : ''} ${isSel ? 'sel' : ''} ${weekend ? 'weekend' : ''} ${fest ? 'has-fest' : ''}`}
+                className={`cal-cell ${isToday ? 'today' : ''} ${isSel ? 'sel' : ''} ${weekend ? 'weekend' : ''} ${fest ? 'has-fest' : ''} ${off ? 'is-off' : ''} ${work ? 'is-work' : ''}`}
                 onClick={() => pickDate(d)}
+                title={
+                  hd
+                    ? `${key}　${hd.name}${off ? '（放假）' : '（调休上班）'}`
+                    : key
+                }
               >
+                {(off || work) && (
+                  <span className={`cal-tag ${off ? 'off' : 'work'}`}>
+                    {off ? '休' : '班'}
+                  </span>
+                )}
                 {fest && <span className="cal-fest">{fest}</span>}
                 <span className="cal-day">{d}</span>
                 {hasMemo(d) && <span className="cal-dot" />}
@@ -206,6 +238,18 @@ export default function CalendarPage() {
             )
           })}
         </div>
+      </div>
+
+      <div className="cal-legend">
+        <span className="cal-legend-item">
+          <span className="cal-tag off">休</span> 放假
+        </span>
+        <span className="cal-legend-item">
+          <span className="cal-tag work">班</span> 调休上班
+        </span>
+        <span className="cal-legend-hint">
+          节假日与调休安排每年自动更新（数据源：国务院放假安排）
+        </span>
       </div>
 
       <div className="cal-memo">

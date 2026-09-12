@@ -7,7 +7,6 @@ import SessionList from './SessionList'
 import ChatWindow from './ChatWindow'
 import FunctionPanel from './FunctionPanel'
 import SettingsModal from './SettingsModal'
-import CloudConnectModal from './CloudConnectModal'
 import WeatherPage from '../pages/WeatherPage'
 import SkillsPage from '../pages/SkillsPage'
 import TodosPage from '../pages/TodosPage'
@@ -37,9 +36,9 @@ export default function MainLayout({
   const [panelWidth, setPanelWidth] = useState(() => Number(localStorage.getItem('panelWidth')) || 320)
   const [incomingText, setIncomingText] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  // 设置 / 云端接入弹窗提升到主布局：入口在左下角（退出登录旁），任意功能页都能打开
+  // 设置弹窗提升到主布局：入口在左下角（退出登录旁），任意功能页都能打开。
+  // 云端接入已并入 设置 → API 管理，不再有独立弹窗。
   const [showSettings, setShowSettings] = useState(false)
-  const [showCloud, setShowCloud] = useState(false)
   const toastTimer = useRef<number | null>(null)
 
   // 全局轻提示（模型切换等操作反馈）
@@ -192,13 +191,12 @@ export default function MainLayout({
   }
 
   const handleConnectCloud = async (payload: LlmConfigPayload) => {
-    // 填了 Key = 真正接入（会先测连）；留空 = 仅更新模型清单
+    // 统一走 configure：填了 Key = 新 Key 测连；留空 = 沿用已保存 Key 仍整体测连并保存
+    // （Host / 默认模型 / 模型清单一并落库，不再出现「只更新清单」丢字段的问题）
     const hasKey = !!payload.cloud_api_key?.trim()
-    const { data: opts } = hasKey
-      ? await llmApi.configure(payload)
-      : await llmApi.saveModels(payload.cloud_models ?? [])
+    const { data: opts } = await llmApi.configure(payload)
     setOptions(opts)
-    showToast(hasKey ? '云端已接入，已切换到云端模型' : '云端模型清单已更新')
+    showToast(hasKey ? '云端已接入，已切换到云端模型' : '云端配置已更新')
     if (hasKey && currentId != null) {
       const cloud = opts.find((o) => o.provider === 'cloud')
       const { data } = await sessionApi.update(currentId, {
@@ -207,6 +205,12 @@ export default function MainLayout({
       })
       setSessions((prev) => prev.map((s) => (s.id === currentId ? data : s)))
     }
+  }
+
+  // 模型下拉里点了「未配置」的云端模型：提示 + 直接打开设置页
+  const handleCloudUnconfigured = () => {
+    showToast('云端模型未配置：请到 设置 → API 管理 接入')
+    setShowSettings(true)
   }
 
   const current = sessions.find((s) => s.id === currentId) || null
@@ -250,7 +254,7 @@ export default function MainLayout({
             model={current.model}
             options={options}
             onModelChange={handleModelChange}
-            onConnectCloud={handleConnectCloud}
+            onUnconfiguredHint={handleCloudUnconfigured}
             panelOpen={panelOpen}
             onTogglePanel={() => setPanelOpen((v) => !v)}
             incomingText={incomingText}
@@ -313,14 +317,8 @@ export default function MainLayout({
         onClose={() => setShowSettings(false)}
         profile={profile}
         onProfileUpdate={onProfileUpdate}
-        onConnectCloud={() => setShowCloud(true)}
+        onConnectCloud={handleConnectCloud}
         onLogout={onLogout}
-      />
-      <CloudConnectModal
-        open={showCloud}
-        onClose={() => setShowCloud(false)}
-        onSubmit={handleConnectCloud}
-        options={options}
       />
     </div>
   )

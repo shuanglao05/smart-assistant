@@ -32,7 +32,7 @@ export default function GlobalModelPicker() {
       options={options}
       value={current}
       onChange={(provider, model) => setGlobalModel(provider, model)}
-      onNeedCloud={() => toast('请在对话界面右上角「设置 → 接入云端模型」中配置')}
+      onUnconfiguredHint={() => toast('云端模型未配置：请到 设置 → API 管理 接入')}
     />
   )
 }

@@ -43,6 +43,44 @@ CLOUD_API_KEY = os.getenv("CLOUD_API_KEY", "")
 CLOUD_BASE_URL = os.getenv("CLOUD_BASE_URL", "").strip() or None
 CLOUD_MODEL = os.getenv("CLOUD_MODEL", "gpt-4o-mini")
 
+# 云端「深度思考」开关（阿里云百炼 / DashScope 思考型模型）。
+# False = 关闭思考，首字快、日常问答足够；True = 先推理再回答，更透彻但明显更慢。
+# 注意：enable_thinking 仅流式调用生效，因此只在聊天流式路径透传；
+# 连通性测试与非流式调用一律不带该参数，避免平台报「仅流式支持」类错误。
+CLOUD_ENABLE_THINKING = _get_bool("CLOUD_ENABLE_THINKING", False)
+
+# 思维链最大 token 数（thinking_budget）：限制思考长度以免无限推理拖慢响应。
+# 0 或负数 = 不传该参数（用平台默认，通常 4000）。仅思考开启时有意义。
+CLOUD_THINKING_BUDGET = int(os.getenv("CLOUD_THINKING_BUDGET", "0") or 0)
+
+# 云端请求使用哪个代理。优先级：CLOUD_PROXY_URL > 环境变量 HTTP(S)_PROXY > 直连。
+#
+# 【为什么需要显式配置】本机直连阿里云极慢（TLS 握手 30~46s，频繁超时），
+# 必须走代理才快（0.9s）。但代理软件（Clash/v2ray 等）的端口常变化，
+# 且不一定写入系统环境变量 —— 后端起进程时抓到的地址可能已失效，
+# 表现为"每次提问要等一两分钟"。故支持在这里显式固定代理地址，
+# 设置页提供「自动检测」按钮扫描本机可用代理并一键填入。
+CLOUD_PROXY_URL = os.getenv("CLOUD_PROXY_URL", "").strip()
+
+# 云端请求是否「绕过系统代理直连」。True = 强制直连；False = 使用上面的代理（默认）。
+CLOUD_TRUST_ENV = _get_bool("CLOUD_TRUST_ENV", False)
+
+
+def supports_thinking(base_url: str | None) -> bool:
+    """判断该 base_url 是否属于阿里云百炼（DashScope），从而支持 enable_thinking / thinking_budget。
+
+    必须按「域名主体」判断，不能只看是否含 dashscope 字样：百炼的
+    应用专属域名形如 https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+    （不含 "dashscope"），但同样是阿里云百炼、同样支持该参数——
+    早前的 `"dashscope" in base_url` 判定导致参数一次都没发出去，思考开关形同虚设。
+    """
+    url = (base_url or "").lower()
+    return "aliyuncs.com" in url or "dashscope" in url
+
+
+# 思考模式下 max_tokens 的平台上限（百炼文档：取值范围 [1, 32768]，超出报 400）
+THINKING_MAX_TOKENS = 32768
+
 # 视觉模型：用于「课表截图识别」等多模态任务（走云端 OpenAI 兼容端点）
 VISION_MODEL = os.getenv("VISION_MODEL", "qwen3-vl-plus")
 
@@ -87,7 +125,17 @@ EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 # RAG 检索参数
 RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "500"))        # 每个片段的目标字符数
 RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "80"))   # 相邻片段重叠字符数
-RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))                    # 检索返回的片段数
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "4"))                    # 全局默认检索片段数（Top-K）
+# 向量化批大小：一次发给 Ollama 的文本条数。太大易超时、太小则往返次数多。
+RAG_EMBED_BATCH = int(os.getenv("RAG_EMBED_BATCH", "32"))
+# 单次检索返回片段的总上限：多知识库各自取 Top-K 后合并，防止片段总数爆掉上下文。
+RAG_MAX_TOTAL_CHUNKS = int(os.getenv("RAG_MAX_TOTAL_CHUNKS", "30"))
+
+# ---------------------------------------------------------------- 文件上传 / 解析
+# 单个文件大小上限（MB）。长 PDF / 教材常有几十 MB，故默认放宽到 50。
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
+# 抽取正文的字符上限：既防爆上下文，也决定入库索引的文本量。
+MAX_CONTENT_CHARS = int(os.getenv("MAX_CONTENT_CHARS", "500000"))
 
 # ---------------------------------------------------------------- 外部工具 Key
 # 天气：优先用高德（中文城市名、国内访问快，个人认证 5000 次/月免费）

@@ -21,7 +21,7 @@ import requests
 
 from app import config
 from app.database import SessionLocal
-from app.models import KbChunk
+from app.models import KbChunk, KbCollection
 
 # Ollama 向量接口（新版批量 /api/embed，旧版单条 /api/embeddings）
 _BASE = config.OLLAMA_BASE_URL.rstrip("/")
@@ -40,14 +40,8 @@ def _embed_one(text: str) -> list[float]:
     return resp.json().get("embedding", [])
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    """批量把一组文本转成向量。
-
-    优先调用新版 /api/embed（一次传多条，快）；若接口不存在或返回异常，
-    自动回退到旧版逐条 /api/embeddings，保证不同 Ollama 版本都能用。
-    """
-    if not texts:
-        return []
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    """单批向量化：优先新版 /api/embed（一次传多条），失败回退旧版逐条。"""
     try:
         resp = requests.post(
             _EMBED_URL,
@@ -62,6 +56,23 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         pass
     # 回退：逐条生成
     return [_embed_one(t) for t in texts]
+
+
+def embed_texts(texts: list[str], batch_size: int | None = None) -> list[list[float]]:
+    """批量把一组文本转成向量；自动分批，避免一次发太多而超时。
+
+    为什么必须分批：长文档（几十 MB 的 PDF）能切出上千个片段，
+    一次性 POST 给 Ollama 极易触发超时（timeout=120s 也扛不住），
+    分批后每批独立完成，既稳又快，也不会因一批失败丢掉全部结果。
+    批大小由 config.RAG_EMBED_BATCH 控制（默认 32）。
+    """
+    if not texts:
+        return []
+    bs = max(1, batch_size or config.RAG_EMBED_BATCH)
+    out: list[list[float]] = []
+    for i in range(0, len(texts), bs):
+        out.extend(_embed_batch(texts[i : i + bs]))
+    return out
 
 
 def split_text(text: str, size: int | None = None, overlap: int | None = None) -> list[str]:
@@ -158,9 +169,14 @@ def search(
 ) -> list[tuple[str, int, float]]:
     """检索与 query 最相关的片段，返回 [(片段文本, file_id, 相似度)]，按相似度降序。
 
+    Top-K 的作用域是【按知识库生效】：
+      · 每个库可在 kb_collections.top_k 单独设置（NULL = 跟随全局默认 RAG_TOP_K）；
+      · 一次检索涉及多个库时，**每个库各取自己配置的条数**，再合并按相似度排序
+        （这样"规范库要精准、资料库要广撒网"可以并存）；
+      · 显式传入 top_k 参数则对所有库统一生效（用于测试或特殊调用）。
+
     collection_ids：只在指定的知识库里检索；为空/None 则在该用户全部知识库里检索。
     """
-    top_k = top_k or config.RAG_TOP_K
     q = (query or "").strip()
     if not q:
         return []
@@ -174,18 +190,34 @@ def search(
         if not rows:
             return []
 
+        # 各库的 Top-K 设置（NULL → 全局默认）
+        per_collection: dict[int | None, int] = {}
+        for c in db.query(KbCollection).filter(KbCollection.user_id == user_id).all():
+            per_collection[c.id] = c.top_k or top_k or config.RAG_TOP_K
+
         qvec = embed_texts([q])[0]
 
-        scored: list[tuple[str, int, float]] = []
+        # 按知识库分组打分（只查一次库，分组在内存里做，性能与原来一致）
+        groups: dict[int | None, list[tuple[str, int, float]]] = {}
         for r in rows:
             try:
                 vec = json.loads(r.embedding)
             except Exception:
                 continue
-            scored.append((r.text, r.file_id, _cosine(qvec, vec)))
+            groups.setdefault(r.collection_id, []).append(
+                (r.text, r.file_id, _cosine(qvec, vec))
+            )
 
-        scored.sort(key=lambda x: x[2], reverse=True)
-        return scored[:top_k]
+        # 每个库各取自己的前 N 名，再合并排序
+        merged: list[tuple[str, int, float]] = []
+        for cid, items in groups.items():
+            k = top_k or per_collection.get(cid) or config.RAG_TOP_K
+            items.sort(key=lambda x: x[2], reverse=True)
+            merged.extend(items[:k])
+
+        merged.sort(key=lambda x: x[2], reverse=True)
+        # 总上限保护：库多时避免片段总数过大撑爆上下文
+        return merged[: config.RAG_MAX_TOTAL_CHUNKS]
     finally:
         db.close()
 

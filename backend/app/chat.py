@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
 from sqlalchemy.orm import Session
 
+from app import config
 from app.agent_manager import build_llm, get_agent_for_conversation
 from app.database import SessionLocal, get_db
 from app.deps import get_current_user
@@ -314,11 +315,20 @@ def chat_stream(
     conv.updated_at = datetime.now(timezone.utc)
     db.commit()
 
-    # 含图片时用多模态模型直连；否则用带记忆的 ReAct 智能体（与上面非流式版本共用记忆）
+    # 含图片时用多模态模型直连；否则用带记忆的 ReAct 智能体（与上面非流式版本共用记忆）。
+    # 深度思考开关只对流式聊天生效（enable_thinking 仅流式合法；
+    # 视觉模型不适用该参数，多模态路径不传）。
     agent = (
         None
         if image_blocks
-        else get_agent_for_conversation(conv.id, current_user.id, provider=conv.provider, model=conv.model)
+        else get_agent_for_conversation(
+            conv.id,
+            current_user.id,
+            provider=conv.provider,
+            model=conv.model,
+            enable_thinking=config.CLOUD_ENABLE_THINKING,
+            thinking_budget=config.CLOUD_THINKING_BUDGET,
+        )
     )
 
     def gen():
@@ -449,8 +459,22 @@ def chat_stream(
             _save(reply)  # 行早已存在，此处写回部分/中断内容
             raise
         except Exception as e:
-            reply = f"出错了: {e}"
+            # 云端报错（401/429/参数不合法/超时等）以前被静默吞成一行文字，用户看不到原因。
+            # 这里把完整堆栈打到后端控制台，并把可读原因推给前端气泡。
+            import traceback
+
+            traceback.print_exc()
+            err_text = str(e) or e.__class__.__name__
+            # 百炼/OpenAI 兼容接口会在异常里带 status_code 与 body，尽量抽出来
+            body = getattr(e, "body", None)
+            if isinstance(body, dict):
+                detail = body.get("message") or body.get("error")
+                if detail:
+                    err_text = f"{err_text}｜{detail}"
+            reply = f"出错了: {err_text}"
             _save(reply)
+            # 额外推一个 error 事件，让前端拿到结构化原因而非只有文字
+            yield f"data: {json.dumps({'error': err_text}, ensure_ascii=False)}\n\n"
         else:
             # 正常结束：把最终内容写回（行早已存在，只更新内容，不会重复建行）
             _save(reply)

@@ -153,6 +153,7 @@ class KbCollectionOut(BaseModel):
     created_at: datetime | None = None  # 容错：历史数据可能为空
     files: int = 0  # 文档数
     chunks: int = 0  # 片段数
+    top_k: int | None = None  # 该库单独的检索 Top-K；None = 跟随全局默认
 
 
 class KbCollectionCreate(BaseModel):
@@ -160,7 +161,11 @@ class KbCollectionCreate(BaseModel):
 
 
 class KbCollectionUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    """更新知识库：改名与 Top-K 都可单独提交（只传要改的字段）。"""
+
+    name: str | None = Field(default=None, max_length=100)
+    # None 表示"清除单独设置、回退到跟随全局默认"；数字为 1~20
+    top_k: int | None = None
 
 
 class KbChunkPreview(BaseModel):

@@ -22,6 +22,14 @@ export interface LlmConfigPayload {
   cloud_base_url?: string
   cloud_model?: string
   cloud_models?: string[]
+  /** 深度思考开关（阿里云百炼/Qwen 思考型模型；undefined = 不改动） */
+  enable_thinking?: boolean
+  /** 思维链最大 token 数（0 = 平台默认，不传该参数） */
+  thinking_budget?: number
+  /** true = 绕过系统代理直连（一般无需开启） */
+  trust_env?: boolean
+  /** 显式代理地址，如 http://127.0.0.1:7890（"" = 清空，回退环境变量/直连） */
+  proxy_url?: string
 }
 
 export interface Message {
@@ -63,6 +71,8 @@ export interface KbCollection {
   created_at: string
   files: number
   chunks: number
+  /** 该库单独的检索 Top-K；null = 跟随全局默认 */
+  top_k: number | null
 }
 
 export interface KbChunkPreview {

@@ -98,6 +98,13 @@ def init_db():
         if "active_kb_ids" not in conv_cols:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN active_kb_ids TEXT DEFAULT '[]'"))
 
+    # ---- kb_collections 增量列：每个知识库可单独设置检索 Top-K ----
+    coll_cols = {c["name"] for c in _sa_inspect(engine).get_columns("kb_collections")}
+    with engine.begin() as conn:
+        if "top_k" not in coll_cols:
+            # NULL 表示跟随全局默认（config.RAG_TOP_K）
+            conn.execute(text("ALTER TABLE kb_collections ADD COLUMN top_k INTEGER"))
+
     # ---- 老数据回填：给"无归属"的文件/片段补一个默认知识库 ----
     with engine.begin() as conn:
         rows = conn.execute(

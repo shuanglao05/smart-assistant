@@ -12,6 +12,7 @@
 """
 
 import inspect
+import os
 
 import httpx
 
@@ -51,24 +52,129 @@ agent_cache: dict[int, object] = {}  # conversation_id -> agent
 _CHECKPOINTER = MemorySaver()
 
 # 云端专用 HTTP 客户端（模块级单例，懒创建）。
-# trust_env=False 让它【绕过系统代理直连】——阿里云是国内站，直连更快更稳；
-# 系统代理（Clash/V2Ray 等）常会缓冲 text/event-stream，导致流式首 token 延迟 10s+，
-# 而非流式 invoke 却只要 ~1.7s，两者差异正是 SSE 被代理缓冲的典型表现。
+#
+# 【踩坑记录 · 极其重要】首字延迟 42s → 1s 的真正原因：
+#   1) langchain-openai 会为 http_socket_options 注入自定义 httpx transport，
+#      该行为【禁用 httpx 的代理自动探测】——所以只改 http_client(trust_env=True) 没用；
+#   2) 本机（及多数国内网络）装有代理软件（HTTP_PROXY=127.0.0.1:xxxx），
+#      且访问阿里云【必须经代理】才能建立 TLS。强制直连会反复握手超时：
+#      实测首字 31~58s、频繁 ConnectTimeout（用户感知为"又慢又报错"）。
+#   ✅ 解法：显式给 ChatOpenAI 传 openai_proxy=系统代理，首字稳定在 1~3s。
+#   ⚠️ 注意 openai_proxy 与 http_client 互斥（同时传会 pydantic 报错），
+#      故走代理时不再传 http_client，只保留 openai_proxy。
+#      若某网络需要直连（无代理 / 代理缓冲 SSE），把 .env 的 CLOUD_TRUST_ENV 设为 true。
 _CLOUD_HTTP: httpx.Client | None = None
+# 当前共享 client 所用的代理地址（用于检测配置变化后自动重建）
+_CLOUD_PROXY_USED: str | None = None
+
+
+def cloud_proxy_url() -> str | None:
+    """当前应使用的代理地址（供 httpx.Client 的 proxy 参数）。
+
+    优先级：显式配置 CLOUD_PROXY_URL > 环境变量 HTTPS_PROXY/HTTP_PROXY 等 > 直连。
+    CLOUD_TRUST_ENV=true（用户明确要求直连）时直接返回 None。
+
+    环境变量为何不可靠：它由进程启动时继承，代理软件改端口后不会更新，
+    后端起进程时抓到的地址可能已失效 —— 这正是"每次提问要等一两分钟"的常见原因。
+    因此设置页支持显式填写并用「自动检测」扫描本机可用代理。
+    """
+    if config.CLOUD_TRUST_ENV:
+        return None
+    if config.CLOUD_PROXY_URL:
+        return config.CLOUD_PROXY_URL
+    return (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or os.environ.get("ALL_PROXY")
+        or os.environ.get("all_proxy")
+    )
 
 
 def _cloud_http_client() -> httpx.Client:
-    global _CLOUD_HTTP
+    """模块级【全局共享】的云端 HTTP 客户端（关键性能组件）。
+
+    ⚠️ 为什么必须共享 + 长保活：
+      httpx 连接池默认 keepalive_expiry=5s，空闲即断；而走代理重新建连极慢
+      （实测冷建连 20~40s、热请求 0.9s）。用户"打字→发送"的间隔通常 >5s，
+      于是每次提问都在重新握手 —— 这就是"时快时慢、常常要等很久"的根因。
+      故全局共享同一 client 并把保活延长到 10 分钟。
+
+    ⚠️ 显式传 proxy 而非依赖环境变量自动探测：langchain-openai 会注入自定义
+      transport 破坏 httpx 的代理自动探测（其 stderr 有明确警告）。
+
+    代理地址变化时（用户在设置页改了代理）自动重建 client，无需重启后端。
+    """
+    global _CLOUD_HTTP, _CLOUD_PROXY_USED
+    proxy = cloud_proxy_url()
+    if _CLOUD_HTTP is not None and _CLOUD_PROXY_USED != proxy:
+        try:
+            _CLOUD_HTTP.close()
+        except Exception:
+            pass
+        _CLOUD_HTTP = None
     if _CLOUD_HTTP is None:
         _CLOUD_HTTP = httpx.Client(
-            trust_env=False,
-            timeout=httpx.Timeout(180.0, connect=15.0),
+            proxy=proxy,  # None = 直连
+            trust_env=False,  # 已显式决定，不再读环境变量，行为可预期
+            timeout=httpx.Timeout(180.0, connect=30.0),
+            limits=httpx.Limits(
+                max_keepalive_connections=16,
+                max_connections=32,
+                keepalive_expiry=600.0,  # 10 分钟：大幅降低重建连接概率
+            ),
         )
+        _CLOUD_PROXY_USED = proxy
     return _CLOUD_HTTP
 
 
-def build_llm(provider: str | None = None, model: str | None = None):
+def reset_http_client() -> None:
+    """丢弃当前共享 client（改代理 / 改直连设置后调用，下次请求按新配置重建）。"""
+    global _CLOUD_HTTP, _CLOUD_PROXY_USED
+    if _CLOUD_HTTP is not None:
+        try:
+            _CLOUD_HTTP.close()
+        except Exception:
+            pass
+    _CLOUD_HTTP = None
+    _CLOUD_PROXY_USED = None
+
+
+def warm_up_cloud() -> None:
+    """预热云端连接：调一次轻量接口，把代理/TLS 链路先建好。
+
+    这样重启后端后的第一条消息不必承担建连开销（冷建连 20~40s vs 热请求 0.9s）。
+    失败静默（未配置 Key / 网络不通时不应影响启动）。
+    """
+    if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
+        return
+    try:
+        url = config.CLOUD_BASE_URL.rstrip("/") + "/models"
+        _cloud_http_client().get(
+            url,
+            headers={"Authorization": f"Bearer {config.CLOUD_API_KEY}"},
+            timeout=20.0,
+        )
+    except Exception:
+        pass
+
+
+def build_llm(
+    provider: str | None = None,
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
+):
     """按 provider/model 构造大模型实例；缺省用全局 LLM_PROVIDER 配置。
+
+    enable_thinking：云端思考开关。
+      - None = 完全不附加该参数（测连 / 非流式调用必须如此，否则百炼报
+        「parameter.enable_thinking must be set to false for non-streaming calls」）；
+      - True/False = 流式请求携带 extra_body {"enable_thinking": ...}。
+    thinking_budget：思维链最大 token 数（>0 时才传，0/None = 用平台默认）。
+    两者都只在「阿里云百炼」类 base_url 上附加（见 config.supports_thinking），
+    其它平台（DeepSeek 官方 / 智谱 / OpenAI）传未知参数有被拒风险。
 
     返回的其实是一个 LangChain 的 "ChatModel"（聊天模型）对象，
     它能接收消息列表、返回回复，并且可以被 create_react_agent 当作"大脑"使用。
@@ -112,11 +218,24 @@ def build_llm(provider: str | None = None, model: str | None = None):
         "streaming": True,
         "timeout": 180,   # 单次请求超时（秒），避免云端卡死时无期限挂起
         "max_retries": 2,  # 失败自动重试次数
-        # 绕过系统代理直连（见 _cloud_http_client 说明），避免 SSE 流被代理缓冲拖慢首字
-        "http_client": _cloud_http_client(),
     }
+    # 网络通路（决定 0.9s 还是 40s 的关键）：
+    #   统一使用【模块级共享】的 http_client —— 代理已显式配在 client 上，
+    #   连接池全局复用且保活 10 分钟，避免每次提问重建 TLS（默认仅 5s 保活，最致命）。
+    #   http_socket_options=() 用于阻止 langchain-openai 注入自定义 transport
+    #   （那会破坏我们显式配置的代理）。
+    #   ⚠️ 不要再传 openai_proxy：它与 http_client 互斥，且每次新建 client、无法复用连接。
+    kwargs["http_client"] = _cloud_http_client()
+    kwargs["http_socket_options"] = ()
     if config.CLOUD_BASE_URL:
         kwargs["base_url"] = config.CLOUD_BASE_URL
+    # 思考开关/思考预算：仅对阿里云百炼类域名透传（Qwen 系专有参数）
+    if enable_thinking is not None and config.supports_thinking(config.CLOUD_BASE_URL):
+        extra: dict = {"enable_thinking": bool(enable_thinking)}
+        if enable_thinking and thinking_budget and thinking_budget > 0:
+            # 限制思维链长度，避免模型无限推理导致长时间等待
+            extra["thinking_budget"] = int(thinking_budget)
+        kwargs["extra_body"] = extra
     return ChatOpenAI(**kwargs)
 
 
@@ -143,7 +262,12 @@ def _create_agent(llm, tools, system_prompt: str | None = None):
 
 
 def get_agent_for_conversation(
-    conversation_id: int, user_id: int, provider: str | None = None, model: str | None = None
+    conversation_id: int,
+    user_id: int,
+    provider: str | None = None,
+    model: str | None = None,
+    enable_thinking: bool | None = None,
+    thinking_budget: int | None = None,
 ):
     """获取（或复用）某个会话对应的智能体。
 
@@ -177,13 +301,32 @@ def get_agent_for_conversation(
 
         provider = (provider or config.LLM_PROVIDER).strip().lower()
         model = model or (config.OLLAMA_MODEL if provider == "ollama" else config.CLOUD_MODEL)
-        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能, 已启用知识库) —— 任何一个变了都要重建
-        cache_key = (conversation_id, provider, model, active_ids_sorted, active_kb_ids)
+        # 思考开关参与缓存：用户在设置里切换「深度思考」后，旧 Agent 必须重建才带新配置。
+        # 本地 Ollama 的思考由 OLLAMA_THINK 独立控制，不随此开关变，恒记 False。
+        thinking_flag = bool(enable_thinking) if provider != "ollama" else False
+        # 思考预算也参与缓存（开思考时才生效；改预算同样要重建）
+        budget = int(thinking_budget or 0) if thinking_flag else 0
+        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能, 已启用知识库, 思考开关, 思考预算)
+        # —— 任何一个变了都要重建
+        cache_key = (
+            conversation_id,
+            provider,
+            model,
+            active_ids_sorted,
+            active_kb_ids,
+            thinking_flag,
+            budget,
+        )
         if cache_key in agent_cache:
             return agent_cache[cache_key]
 
-        # 构建"大脑"
-        llm = build_llm(provider, model)
+        # 构建"大脑"（云端时按开关透传 enable_thinking / thinking_budget；Ollama 路径不涉及）
+        llm = build_llm(
+            provider,
+            model,
+            enable_thinking=None if provider == "ollama" else thinking_flag,
+            thinking_budget=budget,
+        )
         system_prompt = config.SYSTEM_PROMPT
         # 若启用了技能，把每个技能的说明/prompt 拼到系统提示词后面，让模型"带上技能"回答
         if active_skills:

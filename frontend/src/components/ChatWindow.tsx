@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
   Brain,
@@ -19,11 +19,10 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { filesApi, sessionApi } from '../api'
-import type { FileInfo, LlmConfigPayload, LlmOption, Message } from '../types'
+import { filesApi, sessionApi, type FileLimits } from '../api'
+import type { FileInfo, LlmOption, Message } from '../types'
 import MessageBubble from './MessageBubble'
 import NotificationBell from './NotificationBell'
-import CloudConnectModal from './CloudConnectModal'
 import SkillCards from './SkillCards'
 import KbPicker from './KbPicker'
 import ModelPicker from './ModelPicker'
@@ -99,7 +98,7 @@ export default function ChatWindow({
   model,
   options,
   onModelChange,
-  onConnectCloud,
+  onUnconfiguredHint,
   panelOpen,
   onTogglePanel,
   incomingText,
@@ -117,7 +116,8 @@ export default function ChatWindow({
   model?: string
   options: LlmOption[]
   onModelChange: (provider: string, model: string) => void
-  onConnectCloud: (payload: LlmConfigPayload) => Promise<void>
+  /** 点击了「未配置」的云端模型：父级提示并打开设置 */
+  onUnconfiguredHint: () => void
   panelOpen: boolean
   onTogglePanel: () => void
   incomingText: string | null
@@ -129,13 +129,14 @@ export default function ChatWindow({
   activeKbIds: number[]
   onKbChanged: () => void
 }) {
-  const [showCloud, setShowCloud] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [inputH, setInputH] = useState<number | null>(null) // 手动拖动后的输入框高度（null=自动增高）
   const [loading, setLoading] = useState(false)
   const [attaches, setAttaches] = useState<FileInfo[]>([])
   const [attaching, setAttaching] = useState(false)
+  // 上传限制（类型 / 大小），用于附件按钮提示与预检
+  const [limits, setLimits] = useState<FileLimits | null>(null)
   // 右侧文档查看器：当前正在查看的引用文档（null 表示未打开）
   const [viewing, setViewing] = useState<{ id: number; filename: string } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -215,6 +216,14 @@ export default function ChatWindow({
     sessionApi.messages(sessionId).then(({ data }) => setMessages(data))
   }, [sessionId])
 
+  // 拉取上传限制（供附件按钮提示与大小预检；失败不影响正常使用）
+  useEffect(() => {
+    filesApi
+      .limits()
+      .then(({ data }) => setLimits(data))
+      .catch(() => {})
+  }, [])
+
   // Skill 点"使用"后把 prompt 填入输入框
   useEffect(() => {
     if (incomingText != null) {
@@ -241,6 +250,16 @@ export default function ChatWindow({
   // ---------- 附件上传 ----------
   const uploadFiles = async (list: FileList | null) => {
     if (!list || list.length === 0 || attaching) return
+    // 按后端上限预检，超限直接拦下（附件与知识库共用同一套限制）
+    const maxBytes = (limits?.max_mb ?? 50) * 1024 * 1024
+    const tooBig = Array.from(list).filter((f) => f.size > maxBytes)
+    if (tooBig.length > 0) {
+      alert(
+        `以下附件超过 ${limits?.max_mb ?? 50}MB 上限：\n` +
+          tooBig.map((f) => `· ${f.name}（${(f.size / 1024 / 1024).toFixed(1)}MB）`).join('\n')
+      )
+      return
+    }
     setAttaching(true)
     try {
       for (const f of Array.from(list)) {
@@ -253,6 +272,15 @@ export default function ChatWindow({
       setAttaching(false)
     }
   }
+
+  // 流异常后从服务端拉回本会话最新消息：云端网络抖动时，后端可能已经把完整/部分回答落库，
+  // 但前端因 SSE 断连没收到 done 事件。这里主动重拉一次，省去用户手动刷新页面。
+  const recoverMessages = useCallback(() => {
+    sessionApi
+      .messages(sessionId)
+      .then(({ data }) => setMessages(data))
+      .catch(() => {})
+  }, [sessionId])
 
   // ---------- 流式请求核心：把 token 追加到最后一个 assistant 气泡 ----------
   const runStream = async (body: Record<string, unknown>) => {
@@ -290,6 +318,7 @@ export default function ChatWindow({
       const reader = resp.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''
+      let doneReceived = false // 是否正常收到结束事件（没收到 = 连接中途断掉，需要恢复）
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const { done, value } = await reader.read()
@@ -307,7 +336,53 @@ export default function ChatWindow({
           } catch {
             continue
           }
-          if (typeof data.token === 'string') {
+          if (data.done) {
+            // 结束事件：①置位恢复标志（不再触发 recoverMessages）；
+            // ②标注本条回答所用模型（done 带回 provider/model）；
+            // ③补齐这轮问答在后端的 id（done 带回 user_id/assistant_id，用于单条删除）；
+            // ④刷新会话标题 / Todo 角标。
+            // 注意：此分支必须唯一。此前链尾曾残留一个 else if (data.done) 死代码，
+            // 导致模型标注/补 id 永远不执行、要刷新页面才能显示。
+            doneReceived = true
+            if (data.provider || data.model) {
+              const pv = data.provider as string | undefined
+              const md = data.model as string | undefined
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant') {
+                  c[c.length - 1] = { ...last, provider: pv, model: md }
+                }
+                return c
+              })
+            }
+            const uid = data.user_id as number | undefined
+            const aid = data.assistant_id as number | undefined
+            if (uid != null || aid != null) {
+              setMessages((m) => {
+                const c = [...m]
+                if (aid != null) {
+                  for (let k = c.length - 1; k >= 0; k--) {
+                    if (c[k].role === 'assistant') {
+                      if (c[k].id == null) c[k] = { ...c[k], id: aid }
+                      break
+                    }
+                  }
+                }
+                if (uid != null) {
+                  for (let k = c.length - 1; k >= 0; k--) {
+                    if (c[k].role === 'user') {
+                      if (c[k].id == null) c[k] = { ...c[k], id: uid }
+                      break
+                    }
+                  }
+                }
+                return c
+              })
+            }
+            onTitleChange()
+            onTodoChanged()
+          } else if (typeof data.token === 'string') {
             const tok = data.token
             setMessages((m) => {
               const c = [...m]
@@ -339,60 +414,34 @@ export default function ChatWindow({
               }
               return c
             })
-          } else if (data.done) {
-            // 结束事件带回了本次回答所用的模型 → 标注到最后一条助手回答上
-            if (data.provider || data.model) {
-              const pv = data.provider as string | undefined
-              const md = data.model as string | undefined
-              setMessages((m) => {
-                const c = [...m]
-                const last = c[c.length - 1]
-                if (last && last.role === 'assistant') {
-                  c[c.length - 1] = { ...last, provider: pv, model: md }
-                }
-                return c
-              })
-            }
-            // 给刚生成的这轮问答补上后端 id（done 事件带回 user_id / assistant_id），
-            // 这样不刷新页面也能对刚发的消息点删除；仅补 id 为空的本地消息，不动其它。
-            const uid = data.user_id as number | undefined
-            const aid = data.assistant_id as number | undefined
-            if (uid != null || aid != null) {
-              setMessages((m) => {
-                const c = [...m]
-                if (aid != null) {
-                  for (let k = c.length - 1; k >= 0; k--) {
-                    if (c[k].role === 'assistant') {
-                      if (c[k].id == null) c[k] = { ...c[k], id: aid }
-                      break
-                    }
-                  }
-                }
-                if (uid != null) {
-                  for (let k = c.length - 1; k >= 0; k--) {
-                    if (c[k].role === 'user') {
-                      if (c[k].id == null) c[k] = { ...c[k], id: uid }
-                      break
-                    }
-                  }
-                }
-                return c
-              })
-            }
-            onTitleChange()
-            onTodoChanged()
+          } else if (typeof data.error === 'string') {
+            // 后端异常事件：保留可读的真实原因（401/超时/参数不合法等），
+            // 便于用户自助排查，而不是只看到一句笼统的"请求失败"。
+            const msg = data.error
+            setMessages((m) => {
+              const c = [...m]
+              const last = c[c.length - 1]
+              if (last && last.role === 'assistant' && !last.content) {
+                c[c.length - 1] = { ...last, content: `出错了: ${msg}` }
+              }
+              return c
+            })
           }
         }
       }
+      // 流结束但没收到 done 事件（连接中途被掐断）：从服务端拉回已落库的内容，免得手动刷新
+      if (!doneReceived) recoverMessages()
     } catch (err: any) {
       // 用户点了"停止"：保留已生成的部分；其它异常标记失败
       if (err?.name !== 'AbortError') {
         setMessages((m) => {
           const c = [...m]
           const last = c[c.length - 1]
-          if (last && !last.content) c[c.length - 1] = { ...last, content: '请求失败，请重试' }
+          if (last && !last.content) c[c.length - 1] = { ...last, content: '请求失败，请重试（云端可能不稳定，已自动尝试恢复）' }
           return c
         })
+        // 网络抖动导致流中断：后端可能已把完整/部分回答落库，主动拉回
+        recoverMessages()
       }
     } finally {
       setLoading(false)
@@ -485,7 +534,7 @@ export default function ChatWindow({
             value={`${provider || 'ollama'}|${model || ''}`}
             disabled={loading}
             onChange={onModelChange}
-            onNeedCloud={() => setShowCloud(true)}
+            onUnconfiguredHint={onUnconfiguredHint}
           />
           <button
             className="topbar-btn"
@@ -505,12 +554,6 @@ export default function ChatWindow({
             {panelOpen ? <ChevronsRight size={15} /> : <ChevronsLeft size={15} />}
           </button>
         </div>
-        <CloudConnectModal
-          open={showCloud}
-          onClose={() => setShowCloud(false)}
-          onSubmit={onConnectCloud}
-          options={options}
-        />
       </div>
 
       <div className="message-list" onScroll={onListScroll}>
@@ -675,6 +718,7 @@ export default function ChatWindow({
               ref={fileRef}
               type="file"
               multiple
+              accept={limits?.all_exts.join(',') || undefined}
               style={{ display: 'none' }}
               onChange={(e) => {
                 uploadFiles(e.target.files)
@@ -686,7 +730,7 @@ export default function ChatWindow({
                 className="attach-btn"
                 onClick={() => fileRef.current?.click()}
                 disabled={loading || attaching}
-                title="上传附件：文档（txt/md/csv/json/pdf…）或图片，让助手阅读 / 识别后回答"
+                title={`上传附件：PDF / Word(.docx) / 文本 / 图片，单文件 ≤ ${limits?.max_mb ?? 50}MB，助手会阅读或看图后回答`}
               >
                 {attaching ? <Loader2 size={14} className="spin" /> : <Paperclip size={14} />}
               </button>

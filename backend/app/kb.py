@@ -4,6 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -62,6 +63,7 @@ def list_collections(current_user=Depends(get_current_user), db: Session = Depen
             created_at=c.created_at,
             files=file_counts.get(c.id, 0),
             chunks=chunk_counts.get(c.id, 0),
+            top_k=c.top_k,
         )
         for c in cols
     ]
@@ -77,18 +79,35 @@ def create_collection(
     db.add(c)
     db.commit()
     db.refresh(c)
-    return KbCollectionOut(id=c.id, name=c.name, created_at=c.created_at, files=0, chunks=0)
+    return KbCollectionOut(
+        id=c.id, name=c.name, created_at=c.created_at, files=0, chunks=0, top_k=c.top_k
+    )
 
 
 @router.patch("/collections/{cid}", response_model=KbCollectionOut)
-def rename_collection(
+def update_collection(
     cid: int,
     payload: KbCollectionUpdate,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """更新知识库：改名（name）与检索 Top-K（top_k）均可单独提交。
+
+    top_k 语义：不传该字段 = 保持不变；传 null = 清除单独设置、回退跟随全局默认；
+    传数字 = 设定该库专属值（自动夹到 1~20）。
+    """
     c = _collection_or_404(db, current_user.id, cid)
-    c.name = payload.name.strip()
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(400, "知识库名称不能为空")
+        c.name = name
+
+    # 用 model_fields_set 区分「没传」与「显式传了 null」
+    if "top_k" in payload.model_fields_set:
+        c.top_k = None if payload.top_k is None else max(1, min(20, int(payload.top_k)))
+
     db.commit()
     db.refresh(c)
     files = (
@@ -103,7 +122,14 @@ def rename_collection(
         .scalar()
         or 0
     )
-    return KbCollectionOut(id=c.id, name=c.name, created_at=c.created_at, files=files, chunks=chunks)
+    return KbCollectionOut(
+        id=c.id,
+        name=c.name,
+        created_at=c.created_at,
+        files=files,
+        chunks=chunks,
+        top_k=c.top_k,
+    )
 
 
 @router.delete("/collections/{cid}")
@@ -229,6 +255,7 @@ def graph(
         created_at=c.created_at,
         files=len(files),
         chunks=total_chunks,
+        top_k=c.top_k,
     )
     return KbGraph(collection=coll, documents=documents)
 
@@ -248,3 +275,40 @@ def reindex_all(current_user=Depends(get_current_user), db: Session = Depends(ge
         except Exception:
             failed += 1
     return {"indexed": indexed, "failed": failed, "total": len(files)}
+
+
+# ------------------------------------------------------------------ RAG 检索参数
+class RagConfigUpdate(BaseModel):
+    top_k: int
+
+
+@router.get("/rag-config")
+def get_rag_config(_current_user=Depends(get_current_user)):
+    """知识库检索参数（Top-K、切片大小等），供界面展示。"""
+    from app import config
+
+    return {
+        "top_k": config.RAG_TOP_K,
+        "chunk_size": config.RAG_CHUNK_SIZE,
+        "chunk_overlap": config.RAG_CHUNK_OVERLAP,
+        "embed_batch": config.RAG_EMBED_BATCH,
+    }
+
+
+@router.post("/rag-config")
+def set_rag_config(payload: RagConfigUpdate, _current_user=Depends(get_current_user)):
+    """调整检索片段数（Top-K）：立即生效并写入 .env 持久化。
+
+    Top-K 越大，回答时参考的资料越全，但注入上下文也越长（更慢、更贵）。
+    合理区间 3~8：日常问答 4 就够，需要综合多份材料时调到 6~8。
+    """
+    from app import config
+    from app.llm_config import _update_env_file
+
+    k = max(1, min(20, int(payload.top_k)))
+    config.RAG_TOP_K = k
+    try:
+        _update_env_file({"RAG_TOP_K": str(k)})
+    except Exception:
+        pass  # 写盘失败不影响本次生效
+    return {"top_k": k}

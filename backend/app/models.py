@@ -183,6 +183,9 @@ class KbCollection(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String(100), nullable=False)
+    # 该库单独的检索片段数（Top-K）。NULL = 跟随全局默认 config.RAG_TOP_K。
+    # 不同库用途不同：规范/教材类需要精确定位（值小），杂项资料库需要多召回（值大）。
+    top_k = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 

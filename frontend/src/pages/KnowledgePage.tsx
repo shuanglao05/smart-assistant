@@ -4,6 +4,7 @@ import {
   Database,
   FileText,
   FolderPlus,
+  Info,
   List,
   Network,
   Pencil,
@@ -13,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react'
-import { filesApi, kbApi } from '../api'
+import { filesApi, kbApi, type FileLimits } from '../api'
 import PageShell from '../components/PageShell'
 import EngineChip from '../components/EngineChip'
 import KbGraph from '../components/KbGraph'
@@ -33,6 +34,10 @@ export default function KnowledgePage() {
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<'list' | 'graph'>('list')
   const fileRef = useRef<HTMLInputElement>(null)
+  // 上传限制（支持类型 / 大小上限）与 RAG 检索参数，均从后端读取后展示
+  const [limits, setLimits] = useState<FileLimits | null>(null)
+  const [topK, setTopK] = useState<number>(4)
+  const [showTips, setShowTips] = useState(false)
 
   const loadCols = async (): Promise<KbCollection[]> => {
     const { data } = await kbApi.collections()
@@ -52,7 +57,40 @@ export default function KnowledgePage() {
         loadDocs(first)
       })
       .catch(() => {})
+    // 拉取上传限制与检索参数（用于界面标注，避免写死在后端变更后不一致）
+    filesApi
+      .limits()
+      .then(({ data }) => setLimits(data))
+      .catch(() => {})
+    kbApi
+      .ragConfig()
+      .then(({ data }) => setTopK(data.top_k))
+      .catch(() => {})
   }, [])
+
+  // 调整全局默认检索片段数（未单独设置的知识库使用此值）
+  const changeTopK = async (k: number) => {
+    setTopK(k)
+    try {
+      await kbApi.setRagConfig(k)
+    } catch {
+      /* 失败时保留界面值，下次进入会重新同步 */
+    }
+  }
+
+  // 设置「当前知识库」专属的 Top-K：'' = 清除，回退跟随全局默认
+  const changeColTopK = async (v: string) => {
+    if (!cur) return
+    setBusy(true)
+    try {
+      await kbApi.updateCollection(cur.id, { top_k: v === '' ? null : Number(v) })
+      await loadCols()
+    } catch (e: any) {
+      alert(`设置失败：${e?.response?.data?.detail || e?.message || e}`)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const selectCol = (cid: number) => {
     setCurrent(cid)
@@ -77,7 +115,7 @@ export default function KnowledgePage() {
     if (!name || !name.trim() || name.trim() === c.name) return
     setBusy(true)
     try {
-      await kbApi.renameCollection(c.id, name.trim())
+      await kbApi.updateCollection(c.id, { name: name.trim() })
       await loadCols()
     } finally {
       setBusy(false)
@@ -102,6 +140,16 @@ export default function KnowledgePage() {
     if (!list || list.length === 0) return
     if (current == null) {
       alert('请先新建 / 选择一个知识库')
+      return
+    }
+    // 前端先按后端返回的上限预检，超限文件直接拦下，不必等上传完才报错
+    const maxBytes = (limits?.max_mb ?? 50) * 1024 * 1024
+    const tooBig = Array.from(list).filter((f) => f.size > maxBytes)
+    if (tooBig.length > 0) {
+      alert(
+        `以下文件超过 ${limits?.max_mb ?? 50}MB 上限，未上传：\n` +
+          tooBig.map((f) => `· ${f.name}（${fmtSize(f.size)}）`).join('\n')
+      )
       return
     }
     setBusy(true)
@@ -173,9 +221,9 @@ export default function KnowledgePage() {
             className="btn"
             onClick={() => fileRef.current?.click()}
             disabled={busy || current == null}
-            title="把文档上传到当前选中的知识库"
+            title={`上传到当前知识库（支持 PDF / Word / 文本 / 图片，单文件 ≤ ${limits?.max_mb ?? 50}MB）`}
           >
-            <Upload size={15} /> 上传到当前库
+            <Upload size={15} /> {busy ? '解析入库中…' : '上传到当前库'}
           </button>
           <button className="btn" onClick={reindexAll} disabled={busy || docs.length === 0}>
             <RotateCw size={15} /> 重建全部
@@ -187,12 +235,82 @@ export default function KnowledgePage() {
         ref={fileRef}
         type="file"
         multiple
+        accept={limits?.all_exts.join(',') || undefined}
         style={{ display: 'none' }}
         onChange={(e) => {
           upload(e.target.files)
           e.target.value = ''
         }}
       />
+
+      {/* 上传限制与检索参数说明：数据由后端提供，保证与实际限制一致 */}
+      <div className="kb-info">
+        <Info size={14} className="kb-info-ico" />
+        <span className="kb-info-text">
+          支持 <b>PDF</b>、<b>Word(.docx)</b>、<b>文本/代码</b>、<b>图片</b>；单个文件 ≤{' '}
+          <b>{limits?.max_mb ?? 50}MB</b>，上传后自动切分并建立索引
+        </span>
+        <label className="kb-topk">
+          当前库 Top-K
+          <select
+            className="kb-topk-select"
+            value={cur?.top_k ?? ''}
+            disabled={busy || !cur}
+            onChange={(e) => changeColTopK(e.target.value)}
+            title="这个知识库每次检索取几个片段。选「跟随全局」则使用全局默认值；不同库可以各不相同。"
+          >
+            <option value="">跟随全局（{topK}）</option>
+            {[2, 3, 4, 5, 6, 8, 10, 15].map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+          段
+        </label>
+        <button className="kb-info-toggle" onClick={() => setShowTips((v) => !v)}>
+          {showTips ? '收起' : '详细说明'}
+        </button>
+      </div>
+
+      {showTips && limits && (
+        <div className="kb-tips">
+          <div>
+            <b>支持的文件类型</b>：
+            {limits.groups.map((g) => `${g.label}（${g.exts.join(' ')}）`).join('；')}
+          </div>
+          <div>
+            <b>容量限制</b>：单个文件 ≤ {limits.max_mb}MB；抽取的正文最多索引{' '}
+            {limits.max_content_chars.toLocaleString()} 字符（超长部分自动截断，扫描版 PDF
+            需先做 OCR）
+          </div>
+          <div>
+            <b>检索 Top-K 按知识库生效</b>：每个库可单独设置（顶部「当前库 Top-K」），
+            未单独设置的库使用全局默认值。每次提问时，系统会从每个启用的知识库里各取它自己
+            配置的条数（每段约 {limits.chunk_size} 字、相邻重叠 {limits.chunk_overlap} 字）交给模型参考。
+            规范 / 教材类建议调小（2~3，答案更聚焦），会议记录、碎片笔记类建议调大（8~10，避免漏线索）。
+          </div>
+          <div className="kb-global-row">
+            <b>全局默认 Top-K</b>
+            <select
+              className="kb-topk-select"
+              value={topK}
+              disabled={busy}
+              onChange={(e) => changeTopK(Number(e.target.value))}
+            >
+              {[2, 3, 4, 5, 6, 8, 10, 15].map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+            段（未单独设置的知识库使用此值）
+          </div>
+          <div className="kb-tips-legend">
+            已单独设置的库会在左侧列表显示 <span className="kb-badge topk">K4</span> 这样的标记。
+          </div>
+        </div>
+      )}
 
       <div className="kb-layout">
         <aside className="kb-cols">
@@ -223,6 +341,11 @@ export default function KnowledgePage() {
                   </div>
                   <div className="kb-col-sub">
                     {c.files} 文档 · {c.chunks} 片段
+                    {c.top_k != null && (
+                      <span className="kb-badge topk" title={`该库单独设置：每次检索取 ${c.top_k} 段`}>
+                        K{c.top_k}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="kb-col-ops">

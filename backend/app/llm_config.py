@@ -5,7 +5,11 @@
 Base URL 留空时默认使用 OpenAI 官方地址。
 """
 
+import os
+import socket
+import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,10 +23,14 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 class LlmConfigRequest(BaseModel):
-    cloud_api_key: str
+    cloud_api_key: str = ""  # 留空 = 沿用已保存的 Key（仍会做真实测连）
     cloud_base_url: str | None = None
     cloud_model: str | None = None
     cloud_models: list[str] | None = None  # 可选：本次要保存的模型清单
+    enable_thinking: bool | None = None  # 深度思考开关（None = 不改动）
+    thinking_budget: int | None = None  # 思维链上限 token（0/None = 平台默认）
+    trust_env: bool | None = None  # 是否绕过系统代理直连（None = 不改动）
+    proxy_url: str | None = None  # 显式代理地址，如 http://127.0.0.1:7890（"" = 清空）
 
 
 def _env_path() -> Path:
@@ -50,18 +58,26 @@ def _update_env_file(updates: dict[str, str]) -> None:
     path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
 
-def _test_cloud_llm() -> None:
-    """用最小化调用验证 Key / BaseURL / 模型名是否真的可用，失败抛 ValueError。"""
+def _test_cloud(key: str, base_url: str, model: str) -> None:
+    """用最小化调用验证 Key / BaseURL / 模型名是否真的可用，失败抛 ValueError。
+
+    注意：这里【不能】带 enable_thinking（百炼对非流式调用传该参数会直接报 400）。
+    网络通路与聊天完全一致（复用 agent_manager 的全局共享 http_client），
+    否则会出现「测连快但聊天慢」或反过来的矛盾体验。
+    """
     from langchain_openai import ChatOpenAI
 
+    from app.agent_manager import _cloud_http_client
+
     llm = ChatOpenAI(
-        model=config.CLOUD_MODEL,
-        api_key=config.CLOUD_API_KEY,
-        base_url=config.CLOUD_BASE_URL,
+        model=model,
+        api_key=key,
+        base_url=base_url,
         temperature=0,
-        timeout=15,
-        max_retries=1,
-        max_tokens=8,
+        timeout=30,
+        max_retries=0,
+        http_client=_cloud_http_client(),
+        http_socket_options=(),
     )
     try:
         llm.invoke("hi")
@@ -69,21 +85,36 @@ def _test_cloud_llm() -> None:
         raise ValueError(f"连接云端模型失败：{e}") from e
 
 
+def _test_cloud_llm() -> None:
+    """按当前 config 里的值做连通性测试。"""
+    _test_cloud(config.CLOUD_API_KEY, config.CLOUD_BASE_URL, config.CLOUD_MODEL)
+
+
 @router.get("")
 def get_cloud_config(_current_user=Depends(get_current_user)):
-    """返回当前云端配置（不含 Key），供接入弹窗预填，避免保存时把 Base URL 冲掉。"""
+    """返回当前云端配置（不含 Key），供设置页预填，避免保存时把 Base URL 冲掉。"""
     return {
         "cloud_base_url": config.CLOUD_BASE_URL or "",
         "cloud_model": config.CLOUD_MODEL,
         "cloud_models": list(config.CLOUD_MODELS),
+        "enable_thinking": config.CLOUD_ENABLE_THINKING,
+        "thinking_budget": config.CLOUD_THINKING_BUDGET,
+        "supports_thinking": config.supports_thinking(config.CLOUD_BASE_URL),
+        "trust_env": config.CLOUD_TRUST_ENV,
+        "proxy_url": config.CLOUD_PROXY_URL,
+        "env_proxy": _env_proxy(),
+        "effective_proxy": _effective_proxy(),
     }
 
 
 @router.post("")
 def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current_user)):
-    """保存云端大模型配置：先测连，通过后即时生效 + 持久化到 .env。"""
-    if not payload.cloud_api_key.strip():
-        raise HTTPException(400, "API Key 不能为空")
+    """保存云端大模型配置：先测连，通过后即时生效 + 持久化到 .env。
+
+    cloud_api_key 留空表示沿用已保存的 Key（此时仍会做真实测连）。
+    """
+    if not (payload.cloud_api_key.strip() or config.CLOUD_API_KEY):
+        raise HTTPException(400, "API Key 不能为空（请先填写平台申请的 Key）")
 
     # 记录旧值，测试失败时回滚，保证当前可用配置不被破坏
     old = (
@@ -93,8 +124,8 @@ def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current
         list(config.CLOUD_MODELS),
     )
 
-    # 1) 按候选值更新内存中的 config 模块变量
-    config.CLOUD_API_KEY = payload.cloud_api_key.strip()
+    # 1) 按候选值更新内存中的 config 模块变量（Key 留空 = 沿用旧值）
+    config.CLOUD_API_KEY = payload.cloud_api_key.strip() or config.CLOUD_API_KEY
     # Base URL：填了就用；留空则「保持当前不变」（仅当当前也没配过时才回落 OpenAI 官方）
     if payload.cloud_base_url and payload.cloud_base_url.strip():
         config.CLOUD_BASE_URL = payload.cloud_base_url.strip()
@@ -118,6 +149,21 @@ def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current
         ) = old
         raise HTTPException(400, str(e))
 
+    # 2.5) 深度思考开关与思考预算：与测连无关（测连非流式、不带该参数），测连通过才落值
+    if payload.enable_thinking is not None:
+        config.CLOUD_ENABLE_THINKING = payload.enable_thinking
+    if payload.thinking_budget is not None:
+        config.CLOUD_THINKING_BUDGET = max(0, int(payload.thinking_budget))
+    if payload.trust_env is not None:
+        config.CLOUD_TRUST_ENV = payload.trust_env
+    if payload.proxy_url is not None:
+        config.CLOUD_PROXY_URL = payload.proxy_url.strip()
+
+    # 网络设置变了 → 丢弃旧的共享连接池，下次请求按新代理重建
+    from app.agent_manager import reset_http_client
+
+    reset_http_client()
+
     # 3) 持久化到 .env
     _update_env_file(
         {
@@ -125,10 +171,139 @@ def configure_cloud(payload: LlmConfigRequest, _current_user=Depends(get_current
             "CLOUD_BASE_URL": config.CLOUD_BASE_URL or "",
             "CLOUD_MODEL": config.CLOUD_MODEL,
             "CLOUD_MODELS": ",".join(config.CLOUD_MODELS),
+            "CLOUD_ENABLE_THINKING": "true" if config.CLOUD_ENABLE_THINKING else "false",
+            "CLOUD_THINKING_BUDGET": str(config.CLOUD_THINKING_BUDGET),
+            "CLOUD_TRUST_ENV": "true" if config.CLOUD_TRUST_ENV else "false",
+            "CLOUD_PROXY_URL": config.CLOUD_PROXY_URL,
         }
     )
 
     return config.llm_options()
+
+
+class TestRequest(BaseModel):
+    cloud_api_key: str = ""
+    cloud_base_url: str | None = None
+    cloud_model: str | None = None
+
+
+@router.post("/test")
+def test_cloud_config(payload: TestRequest, _current_user=Depends(get_current_user)):
+    """连通性检查：用传入配置（缺省项回落到已保存配置）做一次最小调用。
+
+    恒返回 200；`ok=false` 时 `message` 携带真实失败原因，供前端「检查」按钮直接展示。
+    返回里还带上 `thinking_supported`：是否支持深度思考（思考型模型 + 百炼类端点）。
+    """
+    key = payload.cloud_api_key.strip() or config.CLOUD_API_KEY
+    base = (payload.cloud_base_url or "").strip() or config.CLOUD_BASE_URL or DEFAULT_OPENAI_BASE_URL
+    model = (payload.cloud_model or "").strip() or config.CLOUD_MODEL
+    thinking_ok = config.supports_thinking(base)
+    if not key:
+        return {
+            "ok": False,
+            "message": "尚未填写 API Key，后端也没有已保存的 Key",
+            "thinking_supported": False,
+        }
+    try:
+        _test_cloud(key, base, model)
+    except ValueError as e:
+        return {"ok": False, "message": str(e), "thinking_supported": thinking_ok}
+    # 附加一句：该端点是否支持深度思考，帮用户判断开关有没有意义
+    hint = "，支持深度思考开关" if thinking_ok else "，该端点不支持深度思考（非阿里云百炼）"
+    return {"ok": True, "message": f"连接成功（{model}）{hint}", "thinking_supported": thinking_ok}
+
+
+def _env_proxy() -> str:
+    """环境变量里的代理（注意：后端启动时继承，改代理后不会自动更新）。"""
+    for n in (
+        "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy",
+    ):
+        v = os.environ.get(n)
+        if v:
+            return v
+    return ""
+
+
+def _effective_proxy() -> str:
+    """当前实际生效的代理（与 agent_manager.cloud_proxy_url 保持一致）。"""
+    from app.agent_manager import cloud_proxy_url
+
+    return cloud_proxy_url() or ""
+
+
+def _target_host_port() -> tuple[str, int]:
+    """从 CLOUD_BASE_URL 解析检测用的目标主机与端口。"""
+    url = config.CLOUD_BASE_URL or "https://dashscope.aliyuncs.com"
+    p = urlparse(url if "://" in url else "https://" + url)
+    return (p.hostname or "dashscope.aliyuncs.com", p.port or 443)
+
+
+def _listening_ports() -> list[int]:
+    """用 netstat 列出本机 LISTENING 的 TCP 端口（仅回环 / 通配地址）。"""
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            encoding="utf-8",
+            errors="ignore",
+        ).stdout
+    except Exception:
+        return []
+    ports: set[int] = set()
+    for line in out.splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+        parts = line.split()
+        if len(parts) < 2 or ":" not in parts[1]:
+            continue
+        ip, _, port = parts[1].rpartition(":")
+        if not port.isdigit():
+            continue
+        p = int(port)
+        if ip in ("127.0.0.1", "0.0.0.0", "[::1]", "[::]") and 1024 < p < 65000:
+            ports.add(p)
+    return sorted(ports)
+
+
+def _is_http_proxy(port: int, host: str, tport: int, timeout: float = 3.0) -> bool:
+    """向 127.0.0.1:port 发 CONNECT，判断它是否为可用 HTTP 代理。
+
+    未监听的端口会立即 RST（不等待超时），故整体扫描很快。
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(
+                (
+                    f"CONNECT {host}:{tport} HTTP/1.1\r\n"
+                    f"Host: {host}:{tport}\r\n"
+                    f"Proxy-Connection: keep-alive\r\n\r\n"
+                ).encode()
+            )
+            resp = s.recv(64).decode(errors="ignore")
+        return resp.startswith("HTTP/1.0 200") or resp.startswith("HTTP/1.1 200")
+    except Exception:
+        return False
+
+
+@router.post("/detect-proxy")
+def detect_proxy(_current_user=Depends(get_current_user)):
+    """扫描本机监听端口，找出可作 HTTP 代理访问云端平台的候选，供设置页一键填入。
+
+    背景：本机直连阿里云极慢（TLS 握手 30~46s，常超时），必须走代理才快（约 0.9s）；
+    而代理软件端口常变化、又未必写入系统环境变量，后端容易一直用失效地址。
+    """
+    host, tport = _target_host_port()
+    candidates = [f"http://127.0.0.1:{p}" for p in _listening_ports() if _is_http_proxy(p, host, tport)]
+    return {
+        "candidates": candidates,
+        "target": f"{host}:{tport}",
+        "current": config.CLOUD_PROXY_URL,
+        "env_proxy": _env_proxy(),
+        "effective": _effective_proxy(),
+    }
 
 
 @router.get("/models")

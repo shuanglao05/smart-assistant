@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.auth import router as auth_router
+from app.calendar_api import router as calendar_router
 from app.chat import router as chat_router
 from app.database import init_db
 from app.files import router as files_router
@@ -65,15 +66,34 @@ app.include_router(users_router)
 app.include_router(api_keys_router)
 app.include_router(llm_config_router)
 app.include_router(chat_router)
+app.include_router(calendar_router)
 app.include_router(notes_router)
 app.include_router(schedules_router)
 app.include_router(courses_router)
 
 
 @app.on_event("startup")
-async def _start_reminder_loop():
-    """启动日程提醒后台协程（每 30 秒检查一次「5 分钟后要开始」的日程）。"""
+async def _start_background_tasks():
+    """启动后台任务：日程提醒 + 云端连接预热与保活。
+
+    连接保活为什么必要：httpx 连接空闲会被回收，而本机走代理重建连接需 20~40s
+    （实测热请求 0.9s、冷建连 23s+）。每 60s 打一次轻量请求把连接养着，
+    用户隔几分钟再提问也不会重新握手。GET /models 不消耗 token。
+    """
+    from app.agent_manager import warm_up_cloud
+
+    async def _keep_cloud_alive():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                await asyncio.to_thread(warm_up_cloud)
+            except Exception:
+                pass  # 保活失败不影响业务
+
     asyncio.create_task(reminder_loop())
+    # 预热一次（不阻塞启动），让重启后的第一条消息也不必承担建连开销
+    asyncio.create_task(asyncio.to_thread(warm_up_cloud))
+    asyncio.create_task(_keep_cloud_alive())
 
 
 @app.get("/api/health")

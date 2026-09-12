@@ -1,23 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Cloud, Cpu, Settings } from 'lucide-react'
+import { Check, ChevronDown, Cloud, Cpu } from 'lucide-react'
 import type { LlmOption } from '../types'
 
 /**
- * 自绘模型选择器（替代原生 select）。
- * 分组展示：云端（按清单逐条列出）+ 本地；当前模型打勾；未配置的云端模型点击引导去接入。
+ * 自绘模型选择器（替代原生 select）——只负责切换模型。
+ * 分组展示：云端（按清单逐条列出）+ 本地；当前模型打勾；
+ * 未配置的云端模型点击时触发 onUnconfiguredHint（由父级提示去设置里接入）。
  */
 export default function ModelPicker({
   options,
   value,
   disabled,
   onChange,
-  onNeedCloud,
+  onUnconfiguredHint,
 }: {
   options: LlmOption[]
   value: string // "provider|model"
   disabled?: boolean
   onChange: (provider: string, model: string) => void
-  onNeedCloud: () => void
+  onUnconfiguredHint?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -45,7 +46,7 @@ export default function ModelPicker({
   const pick = (o: LlmOption) => {
     setOpen(false)
     if (o.provider === 'cloud' && !o.configured) {
-      onNeedCloud()
+      onUnconfiguredHint?.()
       return
     }
     onChange(o.provider, o.model)
@@ -91,15 +92,6 @@ export default function ModelPicker({
           {clouds.map(renderItem)}
           {locals.length > 0 && <div className="mp-group">本地</div>}
           {locals.map(renderItem)}
-          <button
-            className="mp-manage"
-            onClick={() => {
-              setOpen(false)
-              onNeedCloud()
-            }}
-          >
-            <Settings size={13} /> 接入 / 管理云端模型
-          </button>
         </div>
       )}
     </div>
