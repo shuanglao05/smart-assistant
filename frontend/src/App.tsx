@@ -4,17 +4,12 @@ import Login from './components/Login'
 import MainLayout from './components/MainLayout'
 import { usersApi } from './api'
 import { I18nProvider, SUPPORTED_LANGS, type Lang } from './i18n'
+import { applyAccent, applyFontSize, applyTheme, getAccent } from './theme'
 import type { UserProfile } from './types'
 
 // 把语言键持久化到 <html>，便于样式/非组件代码读取
 function applyLang(l: Lang) {
   document.documentElement.setAttribute('data-lang', l)
-}
-function applyTheme(t: 'dark' | 'light') {
-  document.documentElement.setAttribute('data-theme', t)
-}
-function applyFontSize(s: 'small' | 'medium' | 'large') {
-  document.documentElement.setAttribute('data-fs', s)
 }
 
 export default function App() {
@@ -34,6 +29,7 @@ export default function App() {
         // 用服务端偏好覆盖本地默认值
         applyTheme(p.data.theme)
         applyFontSize(p.data.font_size)
+        applyAccent(getAccent())
         if (SUPPORTED_LANGS.find((x) => x.value === p.data.language)) applyLang(p.data.language)
         else applyLang('zh')
       })

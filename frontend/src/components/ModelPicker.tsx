@@ -1,12 +1,23 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Cloud, Cpu } from 'lucide-react'
 import type { LlmOption } from '../types'
 
 /**
  * 自绘模型选择器（替代原生 select）——只负责切换模型。
- * 分组展示：云端（按清单逐条列出）+ 本地；当前模型打勾；
- * 未配置的云端模型点击时触发 onUnconfiguredHint（由父级提示去设置里接入）。
+ * 分组展示：本地 → 阿里云百炼 → 智谱 → OpenAI → DeepSeek → ... → 其他平台；
+ * 当前模型打勾；未配置的云端模型点击时触发 onUnconfiguredHint。
  */
+const PLATFORM_ORDER = [
+  '本地',
+  '阿里云百炼',
+  '智谱',
+  'OpenAI',
+  'DeepSeek',
+  '月之暗面',
+  '豆包',
+  '其他平台',
+]
+
 export default function ModelPicker({
   options,
   value,
@@ -15,13 +26,16 @@ export default function ModelPicker({
   onUnconfiguredHint,
 }: {
   options: LlmOption[]
-  value: string // "provider|model"
+  value: string // "provider|model" 或 "provider|model|provider_id"
   disabled?: boolean
-  onChange: (provider: string, model: string) => void
+  onChange: (provider: string, model: string, provider_id?: number) => void
   onUnconfiguredHint?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+
+  const keyOf = (o: LlmOption) =>
+    o.provider_id != null ? `${o.provider}|${o.model}|${o.provider_id}` : `${o.provider}|${o.model}`
 
   useEffect(() => {
     if (!open) return
@@ -39,9 +53,20 @@ export default function ModelPicker({
     }
   }, [open])
 
-  const cur = options.find((o) => `${o.provider}|${o.model}` === value)
-  const clouds = options.filter((o) => o.provider === 'cloud')
-  const locals = options.filter((o) => o.provider !== 'cloud')
+  const cur = options.find((o) => keyOf(o) === value)
+
+  // 按 platform 分组，保持固定顺序，不同平台的模型不混
+  const groups = new Map<string, LlmOption[]>()
+  for (const o of options) {
+    const key = o.platform ?? (o.provider === 'cloud' ? '其他平台' : '本地')
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(o)
+  }
+  const orderedKeys = [...groups.keys()].sort((a, b) => {
+    const ia = PLATFORM_ORDER.indexOf(a)
+    const ib = PLATFORM_ORDER.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  })
 
   const pick = (o: LlmOption) => {
     setOpen(false)
@@ -49,11 +74,13 @@ export default function ModelPicker({
       onUnconfiguredHint?.()
       return
     }
-    onChange(o.provider, o.model)
+    onChange(o.provider, o.model, o.provider_id)
   }
 
   const renderItem = (o: LlmOption) => {
-    const key = `${o.provider}|${o.model}`
+    const key = keyOf(o)
+    // 多 API provider 显示「名称 · 模型」，默认云端/本地只显示模型名
+    const label = o.provider_id != null ? o.label : o.model
     return (
       <button
         key={key}
@@ -66,7 +93,7 @@ export default function ModelPicker({
         ) : (
           <Cpu size={14} className="mp-ico" />
         )}
-        <span className="mp-name">{o.model}</span>
+        <span className="mp-name">{label}</span>
         {o.provider === 'cloud' && !o.configured && <span className="mp-warn">未配置</span>}
         {key === value && <Check size={14} className="mp-check" />}
       </button>
@@ -82,16 +109,18 @@ export default function ModelPicker({
         title="切换当前会话使用的模型"
       >
         {cur?.provider === 'cloud' ? <Cloud size={14} /> : <Cpu size={14} />}
-        <span className="mp-cur">{cur ? cur.model : '选择模型'}</span>
+        <span className="mp-cur">{cur ? (cur.provider_id != null ? cur.label : cur.model) : '选择模型'}</span>
         <ChevronDown size={14} className="mp-caret" />
       </button>
 
       {open && (
         <div className="mp-menu">
-          {clouds.length > 0 && <div className="mp-group">云端</div>}
-          {clouds.map(renderItem)}
-          {locals.length > 0 && <div className="mp-group">本地</div>}
-          {locals.map(renderItem)}
+          {orderedKeys.map((key) => (
+            <Fragment key={key}>
+              <div className="mp-group">{key}</div>
+              {groups.get(key)!.map(renderItem)}
+            </Fragment>
+          ))}
         </div>
       )}
     </div>

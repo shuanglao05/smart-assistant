@@ -23,14 +23,15 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Query
 
+from app import config
 from app.agent_manager import _cloud_http_client
 from app.deps import get_current_user
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 _TIMOR_URL = "https://timor.tech/api/holiday/year/{year}/"
-# 缓存目录：backend/.cache/（不入库，见 .gitignore）
-_CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache"
+# 缓存目录：backend/data/cache/（不入库，见 .gitignore）
+_CACHE_DIR = config.DATA_CACHE
 # 缓存有效期：7 天。放假安排一年只变一次，但留短一点的 TTL 以便修正数据。
 _CACHE_TTL = 7 * 24 * 3600
 

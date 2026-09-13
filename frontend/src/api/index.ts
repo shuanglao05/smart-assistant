@@ -10,6 +10,7 @@ import type {
   KbGraph,
   LlmConfigPayload,
   LlmOption,
+  LlmProvider,
   Message,
   Note,
   NotificationItem,
@@ -42,6 +43,7 @@ export const sessionApi = {
       title?: string
       provider?: string
       model?: string
+      provider_id?: number | null
       active_skill_ids?: number[]
       active_kb_ids?: number[]
     }
@@ -52,15 +54,42 @@ export const sessionApi = {
   clearAll: () => client.delete(`/sessions`),
 }
 
+// 多 API 接入管理（「已接入列表」与「接入新 API」分离）
+export const llmProvidersApi = {
+  list: () => client.get<LlmProvider[]>('/llm-providers'),
+  create: (data: {
+    name: string
+    base_url: string
+    api_key: string
+    model: string
+    models?: string[]
+  }) => client.post<LlmProvider>('/llm-providers', data),
+  update: (
+    id: number,
+    data: {
+      name?: string
+      base_url?: string
+      api_key?: string
+      model?: string
+      models?: string[]
+    }
+  ) => client.patch<LlmProvider>(`/llm-providers/${id}`, data),
+  remove: (id: number) => client.delete(`/llm-providers/${id}`),
+  test: (id: number) =>
+    client.post<{ ok: boolean; message: string }>(`/llm-providers/${id}/test`),
+}
+
 export const llmApi = {
   options: () => client.get<LlmOption[]>('/llm-options'),
   configure: (data: LlmConfigPayload) => client.post<LlmOption[]>('/llm-config', data),
   // 连通性检查：恒 200，{ ok, message }；Key 留空时后端用已保存的 Key 测
   testConfig: (data: { cloud_api_key?: string; cloud_base_url?: string; cloud_model?: string }) =>
-    client.post<{ ok: boolean; message: string; thinking_supported?: boolean }>(
-      '/llm-config/test',
-      data
-    ),
+    client.post<{
+      ok: boolean
+      message: string
+      thinking_supported?: boolean
+      thinking_hint?: string
+    }>('/llm-config/test', data),
   getConfig: () =>
     client.get<{
       cloud_base_url: string
@@ -69,12 +98,14 @@ export const llmApi = {
       enable_thinking: boolean
       thinking_budget: number
       supports_thinking: boolean
+      thinking_hint: string
       trust_env: boolean
       proxy_url: string
       env_proxy: string
       effective_proxy: string
     }>('/llm-config'),
-  fetchModels: () => client.get<{ models: string[] }>('/llm-config/models'),
+  fetchModels: (base_url: string, api_key: string) =>
+    client.post<{ models: string[] }>('/llm-config/models/fetch', { base_url, api_key }),
   // 扫描本机可用代理（直连慢 / 代理端口变化时用）
   detectProxy: () =>
     client.post<{
@@ -86,6 +117,11 @@ export const llmApi = {
     }>('/llm-config/detect-proxy'),
   saveModels: (models: string[]) =>
     client.post<LlmOption[]>('/llm-config/models', { cloud_models: models }),
+  // 本地 Ollama 模型：列出 / 删除
+  localModels: () =>
+    client.get<{ models: string[]; base_url: string; current: string }>('/llm-config/local-models'),
+  deleteLocalModel: (name: string) =>
+    client.delete('/llm-config/local-models', { data: { name } }),
 }
 
 export const chatApi = {
@@ -259,4 +295,21 @@ export const apiKeysApi = {
   info: () => client.get<ApiKeyInfo>('/api-keys'),
   // 修改走原有 llm-config 端点（共享 .env 写入 + 内存立即生效）
   update: (data: LlmConfigPayload) => client.post<LlmOption[]>('/llm-config', data),
+}
+
+// 系统设置：数据存储位置（数据库 / 上传文件 / 缓存）
+export const systemApi = {
+  getDataDir: () =>
+    client.get<{
+      current: string
+      default: string
+      is_default: boolean
+      size_mb: number
+      db_exists: boolean
+    }>('/system/data-dir'),
+  setDataDir: (path: string, migrate = true) =>
+    client.post<{ ok: boolean; path: string; migrated: boolean; need_restart: boolean }>(
+      '/system/data-dir',
+      { path, migrate }
+    ),
 }

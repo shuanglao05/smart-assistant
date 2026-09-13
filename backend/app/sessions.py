@@ -117,14 +117,34 @@ def update_session(
     conv = get_owned_conversation(db, session_id, current_user.id)
     if payload.title is not None:
         conv.title = payload.title
-    if payload.provider is not None:
-        p = payload.provider.strip().lower()
-        if p not in ("ollama", "cloud"):
-            raise HTTPException(400, "不支持的模型提供方")
-        if p == "cloud" and not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
-            raise HTTPException(400, "云端模型未配置：请在 backend/.env 设置 CLOUD_API_KEY 与 CLOUD_BASE_URL")
-        conv.provider = p
-        conv.model = payload.model or (config.OLLAMA_MODEL if p == "ollama" else config.CLOUD_MODEL)
+    if payload.provider is not None or payload.provider_id is not None:
+        # 多 API 优先：选了某个已接入的云端 provider
+        if payload.provider_id is not None:
+            from app.models import LlmProvider
+
+            prow = (
+                db.query(LlmProvider)
+                .filter(LlmProvider.id == payload.provider_id, LlmProvider.user_id == current_user.id)
+                .first()
+            )
+            if not prow:
+                raise HTTPException(400, "该 API 接入不存在")
+            conv.provider = "cloud"
+            conv.provider_id = prow.id
+            # 用前端选中的具体模型；未指定才回落到该 provider 的默认模型
+            conv.model = (payload.model or prow.model).strip()
+        else:
+            p = (payload.provider or "cloud").strip().lower()
+            if p == "ollama":
+                conv.provider = "ollama"
+                conv.provider_id = None
+                conv.model = payload.model or config.OLLAMA_MODEL
+            else:
+                if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
+                    raise HTTPException(400, "云端模型未配置：请在设置里接入 API 或到 backend/.env 配置")
+                conv.provider = "cloud"
+                conv.provider_id = None
+                conv.model = payload.model or config.CLOUD_MODEL
     elif payload.model is not None:
         conv.model = payload.model
     if payload.active_skill_ids is not None:

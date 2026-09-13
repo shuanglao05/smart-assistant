@@ -13,8 +13,8 @@ from app.schemas import UserOut, UserUpdate
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 ALLOWED_LANGS = {"zh", "en"}
-ALLOWED_FONT_SIZES = {"small", "medium", "large"}
-ALLOWED_THEMES = {"dark", "light"}
+ALLOWED_FONT_SIZES = {"fs12", "fs14", "fs16", "fs18", "fs20", "fs22", "small", "medium", "large"}
+ALLOWED_THEMES = {"light", "dark", "sepia", "contrast"}
 
 
 @router.get("/me", response_model=UserOut)

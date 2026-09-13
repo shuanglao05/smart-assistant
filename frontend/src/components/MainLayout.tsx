@@ -131,9 +131,18 @@ export default function MainLayout({
       const g = getGlobalModel()
       if (!g || currentId == null) return
       const cur = sessionsRef.current.find((s) => s.id === currentId)
-      if (cur && cur.provider === g.provider && cur.model === g.model) return
+      const same =
+        cur &&
+        cur.provider === g.provider &&
+        cur.model === g.model &&
+        (cur.provider_id ?? null) === (g.provider_id ?? null)
+      if (same) return
       sessionApi
-        .update(currentId, { provider: g.provider, model: g.model })
+        .update(currentId, {
+          provider: g.provider,
+          model: g.model,
+          provider_id: g.provider_id ?? null,
+        })
         .then(({ data }) => setSessions((p) => p.map((s) => (s.id === currentId ? data : s))))
         .catch(() => {})
     }
@@ -145,7 +154,7 @@ export default function MainLayout({
   useEffect(() => {
     const cur = sessions.find((s) => s.id === currentId)
     if (cur && cur.provider && cur.model && !getGlobalModel()) {
-      setGlobalModel(cur.provider, cur.model)
+      setGlobalModel(cur.provider, cur.model, cur.provider_id ?? undefined)
     }
   }, [sessions, currentId])
 
@@ -163,12 +172,16 @@ export default function MainLayout({
     showToast('已清空全部历史会话')
   }
 
-  const handleModelChange = async (provider: string, model: string) => {
+  const handleModelChange = async (provider: string, model: string, provider_id?: number) => {
     if (currentId == null) return
     try {
-      const { data } = await sessionApi.update(currentId, { provider, model })
+      const { data } = await sessionApi.update(currentId, {
+        provider,
+        model,
+        provider_id: provider_id ?? null,
+      })
       setSessions((prev) => prev.map((s) => (s.id === currentId ? data : s)))
-      setGlobalModel(provider, model) // 聊天里换模型 = 换全局模型，功能页跟着用
+      setGlobalModel(provider, model, provider_id) // 聊天里换模型 = 换全局模型，功能页跟着用
       // 切换成功不再弹提示：每条回答下方会标注所用模型，不额外打扰；仅失败时提示
     } catch (e: any) {
       showToast(`切换失败：${e?.response?.data?.detail || e?.message || e}`)
@@ -247,11 +260,11 @@ export default function MainLayout({
       default:
         return current ? (
           <ChatWindow
-            key={current.id}
             sessionId={current.id}
             title={current.title}
             provider={current.provider}
             model={current.model}
+            providerId={current.provider_id}
             options={options}
             onModelChange={handleModelChange}
             onUnconfiguredHint={handleCloudUnconfigured}

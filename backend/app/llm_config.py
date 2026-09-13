@@ -93,13 +93,17 @@ def _test_cloud_llm() -> None:
 @router.get("")
 def get_cloud_config(_current_user=Depends(get_current_user)):
     """返回当前云端配置（不含 Key），供设置页预填，避免保存时把 Base URL 冲掉。"""
+    thinking_ok, thinking_hint = config.classify_thinking(
+        config.CLOUD_BASE_URL, config.CLOUD_MODEL
+    )
     return {
         "cloud_base_url": config.CLOUD_BASE_URL or "",
         "cloud_model": config.CLOUD_MODEL,
         "cloud_models": list(config.CLOUD_MODELS),
         "enable_thinking": config.CLOUD_ENABLE_THINKING,
         "thinking_budget": config.CLOUD_THINKING_BUDGET,
-        "supports_thinking": config.supports_thinking(config.CLOUD_BASE_URL),
+        "supports_thinking": thinking_ok,
+        "thinking_hint": thinking_hint,
         "trust_env": config.CLOUD_TRUST_ENV,
         "proxy_url": config.CLOUD_PROXY_URL,
         "env_proxy": _env_proxy(),
@@ -192,25 +196,35 @@ def test_cloud_config(payload: TestRequest, _current_user=Depends(get_current_us
     """连通性检查：用传入配置（缺省项回落到已保存配置）做一次最小调用。
 
     恒返回 200；`ok=false` 时 `message` 携带真实失败原因，供前端「检查」按钮直接展示。
-    返回里还带上 `thinking_supported`：是否支持深度思考（思考型模型 + 百炼类端点）。
+    返回里还带上 `thinking_supported` + `thinking_hint`：是否支持深度思考（综合模型名+平台）。
     """
     key = payload.cloud_api_key.strip() or config.CLOUD_API_KEY
     base = (payload.cloud_base_url or "").strip() or config.CLOUD_BASE_URL or DEFAULT_OPENAI_BASE_URL
     model = (payload.cloud_model or "").strip() or config.CLOUD_MODEL
-    thinking_ok = config.supports_thinking(base)
+    thinking_ok, thinking_hint = config.classify_thinking(base, model)
     if not key:
         return {
             "ok": False,
             "message": "尚未填写 API Key，后端也没有已保存的 Key",
             "thinking_supported": False,
+            "thinking_hint": "",
         }
     try:
         _test_cloud(key, base, model)
     except ValueError as e:
-        return {"ok": False, "message": str(e), "thinking_supported": thinking_ok}
-    # 附加一句：该端点是否支持深度思考，帮用户判断开关有没有意义
-    hint = "，支持深度思考开关" if thinking_ok else "，该端点不支持深度思考（非阿里云百炼）"
-    return {"ok": True, "message": f"连接成功（{model}）{hint}", "thinking_supported": thinking_ok}
+        return {
+            "ok": False,
+            "message": str(e),
+            "thinking_supported": thinking_ok,
+            "thinking_hint": thinking_hint,
+        }
+    # 附加一句：该端点是否支持深度思考，帮用户判断开关有没有意义（用准确文案，不再武断）
+    return {
+        "ok": True,
+        "message": f"连接成功（{model}）",
+        "thinking_supported": thinking_ok,
+        "thinking_hint": thinking_hint,
+    }
 
 
 def _env_proxy() -> str:
@@ -262,15 +276,17 @@ def _listening_ports() -> list[int]:
         if not port.isdigit():
             continue
         p = int(port)
-        if ip in ("127.0.0.1", "0.0.0.0", "[::1]", "[::]") and 1024 < p < 65000:
+        # 端口范围 0~65535；代理软件常随机取高端口（如 65262、57563），上限必须到 65535
+        if ip in ("127.0.0.1", "0.0.0.0", "[::1]", "[::]") and 1024 < p <= 65535:
             ports.add(p)
     return sorted(ports)
 
 
-def _is_http_proxy(port: int, host: str, tport: int, timeout: float = 3.0) -> bool:
+def _is_http_proxy(port: int, host: str, tport: int, timeout: float = 1.0) -> bool:
     """向 127.0.0.1:port 发 CONNECT，判断它是否为可用 HTTP 代理。
 
     未监听的端口会立即 RST（不等待超时），故整体扫描很快。
+    timeout 取 1s：监听但非代理的端口最多等 1s，避免全端口扫描拖太久。
     """
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
@@ -308,9 +324,10 @@ def detect_proxy(_current_user=Depends(get_current_user)):
 
 @router.get("/models")
 def list_remote_models(_current_user=Depends(get_current_user)):
-    """尝试调用云端 OpenAI 兼容的 GET /models 拉取可用模型列表。
+    """【已废弃，保留兼容】按全局 CLOUD_* 拉模型列表。
 
-    部分平台未开放该接口；失败时前端回退到手动清单即可。
+    多 API 接入后，拉取模型列表必须传「当前表单的 base_url + key」，请改用
+    POST /models/fetch（否则永远拉到全局 .env 那个平台的模型）。
     """
     if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
         raise HTTPException(400, "请先配置云端 Key 与 Base URL")
@@ -339,6 +356,47 @@ def list_remote_models(_current_user=Depends(get_current_user)):
     return {"models": models}
 
 
+class ModelsFetchRequest(BaseModel):
+    base_url: str
+    api_key: str
+
+
+@router.post("/models/fetch")
+def fetch_remote_models(payload: ModelsFetchRequest, _current_user=Depends(get_current_user)):
+    """按「当前表单填的 base_url + key」拉取该平台的模型列表。
+
+    为什么不能用全局 config：多 API 接入后，config.CLOUD_* 只是某个平台的兜底，
+    接入别的平台时必须用表单里的值，否则会拉到上一个平台的模型。
+    注意：部分平台（如阿里云百炼）的 OpenAI 兼容端点【不提供】 /models 接口，
+    会走到 except 分支返回可读原因，前端据此提示手动填写。
+    """
+    if not (payload.base_url.strip() and payload.api_key.strip()):
+        raise HTTPException(400, "请先填写 API Host 与 API Key")
+    import requests
+
+    url = payload.base_url.strip().rstrip("/") + "/models"
+    try:
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {payload.api_key.strip()}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(400, f"该平台未提供 /models 列表接口（如阿里云百炼）或调用失败：{e}")
+
+    items = data.get("data") if isinstance(data, dict) else None
+    models: list[str] = []
+    if isinstance(items, list):
+        models = [
+            str(it.get("id")) for it in items if isinstance(it, dict) and it.get("id")
+        ]
+    if not models:
+        raise HTTPException(400, "接口未返回模型列表（该平台可能不支持 /models，请手动填写）")
+    return {"models": models}
+
+
 class ModelsUpdate(BaseModel):
     cloud_models: list[str]
 
@@ -352,3 +410,48 @@ def save_models(payload: ModelsUpdate, _current_user=Depends(get_current_user)):
     config.CLOUD_MODELS = models
     _update_env_file({"CLOUD_MODELS": ",".join(models)})
     return config.llm_options()
+
+
+def _fetch_ollama_tags() -> list[str]:
+    """调 Ollama /api/tags 列出本机模型名，并过滤掉 embedding 模型（bge/embed/nomic）。"""
+    import requests
+
+    url = config.OLLAMA_BASE_URL.rstrip("/") + "/api/tags"
+    resp = requests.get(url, timeout=5)
+    resp.raise_for_status()
+    names = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
+    return [n for n in names if not any(k in n.lower() for k in ("bge", "embed", "nomic"))]
+
+
+@router.get("/local-models")
+def list_local_models(_current_user=Depends(get_current_user)):
+    """列出本机 Ollama 已安装的聊天模型（供「设置 → 本地 Ollama」展示与管理）。"""
+    try:
+        models = _fetch_ollama_tags()
+    except Exception as e:
+        raise HTTPException(400, f"无法连接本地 Ollama（{config.OLLAMA_BASE_URL}）：{e}")
+    return {
+        "models": models,
+        "base_url": config.OLLAMA_BASE_URL,
+        "current": config.OLLAMA_MODEL,
+    }
+
+
+class LocalModelDelete(BaseModel):
+    name: str
+
+
+@router.delete("/local-models")
+def delete_local_model(payload: LocalModelDelete, _current_user=Depends(get_current_user)):
+    """删除本机某个 Ollama 模型（破坏性操作，前端需二次确认）。"""
+    import requests
+
+    url = config.OLLAMA_BASE_URL.rstrip("/") + "/api/delete"
+    try:
+        resp = requests.request(
+            "DELETE", url, json={"name": payload.name.strip()}, timeout=15
+        )
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(400, f"删除失败：{e}")
+    return {"ok": True, "deleted": payload.name.strip()}

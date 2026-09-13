@@ -1,14 +1,35 @@
 """数据库连接与会话管理。"""
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.config import DATABASE_URL
 
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False, "timeout": 30} if _is_sqlite else {},
 )
+
+# SQLite 调优（仅在 sqlite 下挂载）：
+#   journal_mode=WAL  —— 默认的 DELETE 模式下「写」会阻塞「读」，导致重建知识库
+#                        索引时（长时间批量写）整个服务报 database is locked。
+#                        WAL 下读写可并发，写入也不会因为 fsync 而拖慢。
+#   synchronous=NORMAL —— WAL 下的推荐搭配，兼顾安全与速度。
+#   busy_timeout       —— 万一仍撞锁，等 30s 而不是立刻抛错。
+if _is_sqlite:
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+        finally:
+            cur.close()
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -26,7 +47,7 @@ def get_db():
 
 def init_db():
     """开发期自动建表。生产环境建议改用 Alembic 迁移。"""
-    from app.models import User, Conversation, Message, TodoItem, Skill, FileItem, KbCollection, KbChunk, Notification  # noqa: F401  确保模型已注册
+    from app.models import User, Conversation, Message, TodoItem, Skill, FileItem, KbCollection, KbChunk, Notification, LlmProvider  # noqa: F401  确保模型已注册
 
     Base.metadata.create_all(bind=engine)
 
@@ -55,6 +76,9 @@ def init_db():
             conn.execute(
                 text("ALTER TABLE conversations ADD COLUMN active_skill_ids TEXT DEFAULT '[]'")
             )
+        if "provider_id" not in existing:
+            # 多 API 接入：指向 llm_providers.id；NULL = 用默认 CLOUD_* 或本地 Ollama
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN provider_id INTEGER"))
 
     # ---- users 增量列（设置面板的 nickname/avatar/language/font_size/theme） ----
     user_cols = {c["name"] for c in inspector.get_columns("users")}

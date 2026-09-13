@@ -13,6 +13,9 @@
 
 import inspect
 import os
+import socket
+import subprocess
+from urllib.parse import urlparse
 
 import httpx
 
@@ -31,7 +34,7 @@ from langgraph.prebuilt import create_react_agent
 
 from app import config
 from app.database import SessionLocal
-from app.models import Conversation, Skill
+from app.models import Conversation, LlmProvider, Skill
 from app.tools import (
     calculator,
     get_weather,
@@ -66,22 +69,94 @@ _CHECKPOINTER = MemorySaver()
 _CLOUD_HTTP: httpx.Client | None = None
 # 当前共享 client 所用的代理地址（用于检测配置变化后自动重建）
 _CLOUD_PROXY_USED: str | None = None
+# 自动检测到的可用代理（本机代理软件端口常变，启动预热失败时扫描得到，优先于可能失效的环境变量）
+_AUTO_PROXY: str | None = None
+
+
+def _target_host_port() -> tuple[str, int]:
+    """从 CLOUD_BASE_URL 解析检测用的目标主机与端口。"""
+    url = config.CLOUD_BASE_URL or "https://open.bigmodel.cn"
+    p = urlparse(url if "://" in url else "https://" + url)
+    return (p.hostname or "open.bigmodel.cn", p.port or 443)
+
+
+def _listening_ports() -> list[int]:
+    """用 netstat 列出本机 LISTENING 的 TCP 端口（仅回环 / 通配地址）。"""
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            encoding="utf-8",
+            errors="ignore",
+        ).stdout
+    except Exception:
+        return []
+    ports: set[int] = set()
+    for line in out.splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+        parts = line.split()
+        if len(parts) < 2 or ":" not in parts[1]:
+            continue
+        ip, _, port = parts[1].rpartition(":")
+        if not port.isdigit():
+            continue
+        p = int(port)
+        # 端口范围 0~65535；代理软件常随机取高端口（如 65262、57563），上限必须到 65535
+        if ip in ("127.0.0.1", "0.0.0.0", "[::1]", "[::]") and 1024 < p <= 65535:
+            ports.add(p)
+    return sorted(ports)
+
+
+def _is_http_proxy(port: int, host: str, tport: int, timeout: float = 1.0) -> bool:
+    """向 127.0.0.1:port 发 CONNECT，判断它是否为可用 HTTP 代理。
+
+    未监听的端口会立即 RST（不等待超时）；监听但非代理的端口最多等 timeout 秒。
+    timeout 取 1s，避免全端口扫描拖太久（只在代理失效时才会触发扫描）。
+    """
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall(
+                (
+                    f"CONNECT {host}:{tport} HTTP/1.1\r\n"
+                    f"Host: {host}:{tport}\r\n"
+                    f"Proxy-Connection: keep-alive\r\n\r\n"
+                ).encode()
+            )
+            resp = s.recv(64).decode(errors="ignore")
+        return resp.startswith("HTTP/1.0 200") or resp.startswith("HTTP/1.1 200")
+    except Exception:
+        return False
+
+
+def _auto_find_proxy() -> str | None:
+    """扫描本机监听端口，找出能 CONNECT 到云端平台的可用 HTTP 代理。"""
+    host, tport = _target_host_port()
+    for p in _listening_ports():
+        if _is_http_proxy(p, host, tport):
+            return f"http://127.0.0.1:{p}"
+    return None
 
 
 def cloud_proxy_url() -> str | None:
     """当前应使用的代理地址（供 httpx.Client 的 proxy 参数）。
 
-    优先级：显式配置 CLOUD_PROXY_URL > 环境变量 HTTPS_PROXY/HTTP_PROXY 等 > 直连。
+    优先级：显式配置 CLOUD_PROXY_URL > 自动检测结果 > 环境变量 HTTPS_PROXY/HTTP_PROXY 等 > 直连。
     CLOUD_TRUST_ENV=true（用户明确要求直连）时直接返回 None。
 
     环境变量为何不可靠：它由进程启动时继承，代理软件改端口后不会更新，
     后端起进程时抓到的地址可能已失效 —— 这正是"每次提问要等一两分钟"的常见原因。
-    因此设置页支持显式填写并用「自动检测」扫描本机可用代理。
+    因此支持显式填写，并在启动预热失败时自动扫描本机可用代理（_AUTO_PROXY）。
     """
     if config.CLOUD_TRUST_ENV:
         return None
     if config.CLOUD_PROXY_URL:
         return config.CLOUD_PROXY_URL
+    if _AUTO_PROXY:
+        return _AUTO_PROXY
     return (
         os.environ.get("HTTPS_PROXY")
         or os.environ.get("https_proxy")
@@ -146,18 +221,45 @@ def warm_up_cloud() -> None:
 
     这样重启后端后的第一条消息不必承担建连开销（冷建连 20~40s vs 热请求 0.9s）。
     失败静默（未配置 Key / 网络不通时不应影响启动）。
+
+    多 API：优先用 .env 的 CLOUD_*；若已清空，则取 llm_providers 表第一个 provider。
+    关键增强：若预热失败，很可能是当前代理已失效（本机代理软件端口常变），
+    此时自动扫描本机可用代理并重建共享 client，让后续请求走新代理而非慢速直连。
     """
-    if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
+    global _AUTO_PROXY
+
+    key = config.CLOUD_API_KEY
+    base = config.CLOUD_BASE_URL
+    if not (key and base):
+        # 旧单配置已清空：取第一个已接入的 provider
+        from app.database import SessionLocal
+        from app.models import LlmProvider
+
+        try:
+            db = SessionLocal()
+            p = db.query(LlmProvider).order_by(LlmProvider.id.asc()).first()
+            if p:
+                key, base = p.api_key, p.base_url
+        finally:
+            db.close()
+    if not (key and base):
         return
+    url = base.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {key}"}
     try:
-        url = config.CLOUD_BASE_URL.rstrip("/") + "/models"
-        _cloud_http_client().get(
-            url,
-            headers={"Authorization": f"Bearer {config.CLOUD_API_KEY}"},
-            timeout=20.0,
-        )
+        _cloud_http_client().get(url, headers=headers, timeout=20.0)
+        return
     except Exception:
-        pass
+        # 预热失败：尝试自动检测可用代理（无显式 CLOUD_PROXY_URL 时才做，尊重用户手动配置）
+        if not config.CLOUD_PROXY_URL:
+            auto = _auto_find_proxy()
+            if auto and auto != cloud_proxy_url():
+                _AUTO_PROXY = auto
+                reset_http_client()
+                try:
+                    _cloud_http_client().get(url, headers=headers, timeout=20.0)
+                except Exception:
+                    pass  # 自动恢复也失败：保持直连/环境变量，不阻断启动
 
 
 def build_llm(
@@ -165,8 +267,13 @@ def build_llm(
     model: str | None = None,
     enable_thinking: bool | None = None,
     thinking_budget: int | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ):
     """按 provider/model 构造大模型实例；缺省用全局 LLM_PROVIDER 配置。
+
+    api_key / base_url：多 API 接入时由调用方传入（来自 llm_providers 表），
+    缺省回落到 config.CLOUD_* 默认值（兼容旧数据与未接入 provider 的场景）。
 
     enable_thinking：云端思考开关。
       - None = 完全不附加该参数（测连 / 非流式调用必须如此，否则百炼报
@@ -204,14 +311,16 @@ def build_llm(
         return ChatOllama(**kwargs)
 
     # 云端 OpenAI 兼容平台：必须已配置 Key 与 BaseURL
-    if not (config.CLOUD_API_KEY and config.CLOUD_BASE_URL):
-        raise ValueError("云端模型未配置：请在 backend/.env 设置 CLOUD_API_KEY 与 CLOUD_BASE_URL")
+    cloud_key = api_key or config.CLOUD_API_KEY
+    cloud_base = base_url or config.CLOUD_BASE_URL
+    if not (cloud_key and cloud_base):
+        raise ValueError("云端模型未配置：请在设置里接入 API，或到 backend/.env 设置 CLOUD_API_KEY 与 CLOUD_BASE_URL")
     # 云端方案：langchain-openai 的 ChatOpenAI 兼容 OpenAI / 智谱 / DeepSeek / 硅基流动等。
     from langchain_openai import ChatOpenAI
 
     kwargs = {
         "model": model or config.CLOUD_MODEL,
-        "api_key": config.CLOUD_API_KEY,
+        "api_key": cloud_key,
         "temperature": 0,
         # 开启流式：agent.stream(stream_mode="messages") 才能逐 token 推给前端，
         # 否则整段生成完才一次性吐出，前端长时间空白、像"不回复"。
@@ -227,10 +336,9 @@ def build_llm(
     #   ⚠️ 不要再传 openai_proxy：它与 http_client 互斥，且每次新建 client、无法复用连接。
     kwargs["http_client"] = _cloud_http_client()
     kwargs["http_socket_options"] = ()
-    if config.CLOUD_BASE_URL:
-        kwargs["base_url"] = config.CLOUD_BASE_URL
+    kwargs["base_url"] = cloud_base
     # 思考开关/思考预算：仅对阿里云百炼类域名透传（Qwen 系专有参数）
-    if enable_thinking is not None and config.supports_thinking(config.CLOUD_BASE_URL):
+    if enable_thinking is not None and config.supports_thinking(cloud_base):
         extra: dict = {"enable_thinking": bool(enable_thinking)}
         if enable_thinking and thinking_budget and thinking_budget > 0:
             # 限制思维链长度，避免模型无限推理导致长时间等待
@@ -299,14 +407,36 @@ def get_agent_for_conversation(
         # 本次对话启用（参与检索）的知识库；空元组 = 不限制（检索全部库）
         active_kb_ids = tuple(int(x) for x in (conv.active_kb_ids or [])) if conv else ()
 
+        # 多 API 接入：会话若指定了 provider_id，则用该 provider 的凭据/模型；
+        # 否则回落到全局 CLOUD_*；若 CLOUD_* 也已清空（旧单配置已删除），
+        # 则回退到该用户「第一个已接入的 provider」，保证旧会话仍可用。
+        pvid = getattr(conv, "provider_id", None) if conv else None
+        provider_row: LlmProvider | None = None
+        if pvid:
+            provider_row = (
+                db.query(LlmProvider)
+                .filter(LlmProvider.id == pvid, LlmProvider.user_id == user_id)
+                .first()
+            )
         provider = (provider or config.LLM_PROVIDER).strip().lower()
-        model = model or (config.OLLAMA_MODEL if provider == "ollama" else config.CLOUD_MODEL)
+        if provider_row is None and provider != "ollama" and not config.CLOUD_API_KEY:
+            # 兜底：旧会话未指定 provider 且 .env 已无默认云端配置 → 用第一个已接入的 provider
+            provider_row = (
+                db.query(LlmProvider)
+                .filter(LlmProvider.user_id == user_id)
+                .order_by(LlmProvider.id.asc())
+                .first()
+            )
+        if provider_row:
+            model = model or provider_row.model
+        else:
+            model = model or (config.OLLAMA_MODEL if provider == "ollama" else config.CLOUD_MODEL)
         # 思考开关参与缓存：用户在设置里切换「深度思考」后，旧 Agent 必须重建才带新配置。
         # 本地 Ollama 的思考由 OLLAMA_THINK 独立控制，不随此开关变，恒记 False。
         thinking_flag = bool(enable_thinking) if provider != "ollama" else False
         # 思考预算也参与缓存（开思考时才生效；改预算同样要重建）
         budget = int(thinking_budget or 0) if thinking_flag else 0
-        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能, 已启用知识库, 思考开关, 思考预算)
+        # 缓存键 = (会话, 模型供应方, 具体模型, 已启用技能, 已启用知识库, 思考开关, 思考预算, provider_id)
         # —— 任何一个变了都要重建
         cache_key = (
             conversation_id,
@@ -316,16 +446,20 @@ def get_agent_for_conversation(
             active_kb_ids,
             thinking_flag,
             budget,
+            pvid,
         )
         if cache_key in agent_cache:
             return agent_cache[cache_key]
 
         # 构建"大脑"（云端时按开关透传 enable_thinking / thinking_budget；Ollama 路径不涉及）
+        # 多 API：provider_row 存在时传入其 key/base_url
         llm = build_llm(
             provider,
             model,
             enable_thinking=None if provider == "ollama" else thinking_flag,
             thinking_budget=budget,
+            api_key=provider_row.api_key if provider_row else None,
+            base_url=provider_row.base_url if provider_row else None,
         )
         system_prompt = config.SYSTEM_PROMPT
         # 若启用了技能，把每个技能的说明/prompt 拼到系统提示词后面，让模型"带上技能"回答

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Cloud, Cpu, Eye, EyeOff, Loader2, RefreshCw, Search, Zap } from 'lucide-react'
-import { apiKeysApi, llmApi, usersApi } from '../api'
-import type { ApiKeyInfo, LlmConfigPayload, UserProfile } from '../types'
+import { Check, Cloud, Cpu, Eye, EyeOff, Loader2, Plus, RefreshCw, Search, Trash2, X, Zap } from 'lucide-react'
+import { apiKeysApi, llmApi, llmProvidersApi, systemApi, usersApi } from '../api'
+import type { ApiKeyInfo, LlmConfigPayload, LlmProvider, UserProfile } from '../types'
 import { useI18n } from '../i18n'
+import { ACCENTS, FONT_SIZES, THEMES, applyAccent, applyFontSize, applyTheme, getAccent } from '../theme'
 
 type Tab = 'appearance' | 'api' | 'account'
 
@@ -10,12 +11,6 @@ type Tab = 'appearance' | 'api' | 'account'
 const AVATAR_PRESETS = [
   '😀', '😎', '🤓', '🧐', '🤖', '👨‍💻', '👩‍💻', '🦊', '🐱', '🐶',
   '🐼', '🦉', '🦄', '🐲', '🌟', '🚀', '⚡', '🌈', '🍀', '🎯',
-]
-
-const FONT_SIZES: Array<{ value: 'small' | 'medium' | 'large'; key: string }> = [
-  { value: 'small', key: 'settings.fontSize.small' },
-  { value: 'medium', key: 'settings.fontSize.medium' },
-  { value: 'large', key: 'settings.fontSize.large' },
 ]
 
 // 常用 OpenAI 兼容平台：点击自动填充 API Host 和模型名
@@ -28,13 +23,6 @@ const PRESETS = [
 
 const parseList = (t: string) =>
   Array.from(new Set(t.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)))
-
-function applyTheme(theme: 'dark' | 'light') {
-  document.documentElement.setAttribute('data-theme', theme)
-}
-function applyFontSize(size: 'small' | 'medium' | 'large') {
-  document.documentElement.setAttribute('data-fs', size)
-}
 
 /** 头像原图上限：3MB */
 const MAX_AVATAR_SRC = 3 * 1024 * 1024
@@ -102,10 +90,15 @@ export default function SettingsModal({
 
   const [apiKey, setApiKey] = useState<ApiKeyInfo | null>(null)
 
-  // ---- API 管理（ChatBox 式双栏）表单状态 ----
-  const [navSel, setNavSel] = useState<'cloud' | 'local'>('cloud')
+  // ---- API 管理（多 API：已接入列表 + 接入表单分离）----
+  const [navSel, setNavSel] = useState<'cloud' | 'local' | number>('cloud')
   const [cloudConfigured, setCloudConfigured] = useState(false)
   const [localModel, setLocalModel] = useState('')
+  const [localModels, setLocalModels] = useState<string[]>([]) // 本机 Ollama 全部模型
+  const [localLoading, setLocalLoading] = useState(false)
+  const [localErr, setLocalErr] = useState('')
+  const [providers, setProviders] = useState<LlmProvider[]>([])
+  const [providerName, setProviderName] = useState('')
   const [keyInput, setKeyInput] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [baseUrl, setBaseUrl] = useState('')
@@ -116,11 +109,12 @@ export default function SettingsModal({
   const [savingCloud, setSavingCloud] = useState(false)
   const [cloudErr, setCloudErr] = useState('')
   const [fetching, setFetching] = useState(false)
-  // 深度思考开关（阿里云百炼/Qwen 思考型模型；关 = 快，开 = 先推理更透彻）
+  // 深度思考开关（推理模型才有效；关 = 快，开 = 先推理更透彻）
   const [deepThinking, setDeepThinking] = useState(false)
   const [thinkBudget, setThinkBudget] = useState(0)
-  // 该端点是否支持深度思考（非阿里云百炼则开关无意义，置灰）
+  // 该端点是否支持深度思考（综合模型名 + 平台判断）
   const [thinkSupported, setThinkSupported] = useState(true)
+  const [thinkHint, setThinkHint] = useState('')
   // 是否绕过系统代理直连（默认关；网络必须走代理时开着会极慢）
   const [bypassProxy, setBypassProxy] = useState(false)
   // 代理地址（直连慢时的救命配置；代理软件端口常变，靠「自动检测」找）
@@ -134,6 +128,14 @@ export default function SettingsModal({
 
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  // 强调色（前端偏好，存 localStorage）
+  const [accentColor, setAccentColor] = useState(getAccent())
+  // 数据存储位置（系统设置）
+  const [dataDir, setDataDir] = useState('')
+  const [dataDirInput, setDataDirInput] = useState('')
+  const [dataDirSizeMb, setDataDirSizeMb] = useState(0)
+  const [savingDataDir, setSavingDataDir] = useState(false)
+  const [dataDirMsg, setDataDirMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   // 当 modal 打开 / 初始 profile 变化时同步本地状态
@@ -146,13 +148,17 @@ export default function SettingsModal({
     setTab('appearance')
   }, [open, initialProfile])
 
-  // 切到 API tab：拉取密钥信息 + 当前云端配置 + 模型清单，并重置表单
+  // 切到 API tab：拉取密钥信息 + 当前云端配置 + 模型清单 + 已接入的 API，并重置表单
   useEffect(() => {
     if (!open || tab !== 'api') return
     setKeyInput('')
     setShowKey(false)
     setCheckResult(null)
     setCloudErr('')
+    llmProvidersApi
+      .list()
+      .then(({ data }) => setProviders(data))
+      .catch(() => setProviders([]))
     apiKeysApi
       .info()
       .then(({ data }) => setApiKey(data))
@@ -166,6 +172,7 @@ export default function SettingsModal({
         setDeepThinking(!!data.enable_thinking)
         setThinkBudget(data.thinking_budget || 0)
         setThinkSupported(data.supports_thinking !== false)
+        setThinkHint(data.thinking_hint || '')
         setBypassProxy(!!data.trust_env)
         setProxyUrl(data.proxy_url || '')
         setProxyEnv(data.env_proxy || '')
@@ -179,6 +186,7 @@ export default function SettingsModal({
         setLocalModel(data.find((o) => o.provider !== 'cloud')?.model || 'ollama')
       })
       .catch(() => {})
+    refreshLocalModels()
   }, [open, tab])
 
   // 切到外观 tab 即应用主题/字号（语言已移除，固定中文）
@@ -190,6 +198,20 @@ export default function SettingsModal({
     }
   }, [open, tab, initialProfile])
 
+  // 切到账户 tab：加载数据存储位置信息
+  useEffect(() => {
+    if (!open || tab !== 'account') return
+    setDataDirMsg('')
+    systemApi
+      .getDataDir()
+      .then(({ data }) => {
+        setDataDir(data.current)
+        setDataDirInput(data.current)
+        setDataDirSizeMb(data.size_mb)
+      })
+      .catch(() => {})
+  }, [open, tab])
+
   if (!open || !initialProfile) return null
 
   const showToast = (msg: string) => {
@@ -197,8 +219,8 @@ export default function SettingsModal({
     window.setTimeout(() => setToast(null), 2000)
   }
 
-  // ----- 外观：主题 / 字号 -----
-  const changeTheme = async (theme: 'dark' | 'light') => {
+  // ----- 外观：主题 / 字号 / 强调色 -----
+  const changeTheme = async (theme: string) => {
     applyTheme(theme)
     setSaving(true)
     try {
@@ -208,7 +230,7 @@ export default function SettingsModal({
       setSaving(false)
     }
   }
-  const changeFontSize = async (size: 'small' | 'medium' | 'large') => {
+  const changeFontSize = async (size: string) => {
     applyFontSize(size)
     setSaving(true)
     try {
@@ -217,6 +239,11 @@ export default function SettingsModal({
     } finally {
       setSaving(false)
     }
+  }
+  // 强调色：仅前端偏好，存 localStorage（不动后端）
+  const changeAccent = (color: string) => {
+    applyAccent(color)
+    setAccentColor(color)
   }
 
   // ----- 账户：昵称 / 头像 -----
@@ -297,6 +324,7 @@ export default function SettingsModal({
       setCheckInfo(data.message)
       if (typeof data.thinking_supported === 'boolean') {
         setThinkSupported(data.thinking_supported)
+        setThinkHint(data.thinking_hint || '')
       }
     } catch (e: any) {
       setCheckResult({ ok: false, message: e?.response?.data?.detail || e?.message || '检查失败' })
@@ -306,10 +334,21 @@ export default function SettingsModal({
   }
 
   const fetchCloudModels = async () => {
+    // 拉取当前表单填写的平台的模型列表（必须传 base_url + key，
+    // 否则后端用全局 .env 配置，会拉到上一个平台的模型）
+    if (!baseUrl.trim()) {
+      setCloudErr('请先填写 API Host')
+      return
+    }
+    if (!keyInput.trim() && typeof navSel === 'number') {
+      // 编辑态 Key 留空 = 沿用已保存 Key，无法用空 key 拉列表；提示填新 key 或手动填模型
+      setCloudErr('编辑时请重新粘贴 API Key 再拉取，或直接手动填写模型名')
+      return
+    }
     setFetching(true)
     setCloudErr('')
     try {
-      const { data } = await llmApi.fetchModels()
+      const { data } = await llmApi.fetchModels(baseUrl.trim(), keyInput.trim())
       setModelsText(data.models.join('\n'))
     } catch (e: any) {
       setCloudErr(e?.response?.data?.detail || '拉取失败，请手动填写模型名')
@@ -381,10 +420,159 @@ export default function SettingsModal({
     }
   }
 
+  // ----- 多 API：已接入列表 + 接入/编辑 -----
+  const refreshProviders = () => {
+    llmProvidersApi
+      .list()
+      .then(({ data }) => setProviders(data))
+      .catch(() => setProviders([]))
+  }
+
+  // ----- 本地 Ollama 模型：列出 / 删除 -----
+  const refreshLocalModels = () => {
+    setLocalLoading(true)
+    setLocalErr('')
+    llmApi
+      .localModels()
+      .then(({ data }) => {
+        setLocalModels(data.models || [])
+        if (data.current) setLocalModel(data.current)
+      })
+      .catch((e: any) => setLocalErr(e?.response?.data?.detail || '无法连接本地 Ollama'))
+      .finally(() => setLocalLoading(false))
+  }
+
+  const deleteLocalModel = async (name: string) => {
+    if (!confirm(`删除本地模型「${name}」？此操作会从磁盘移除该模型，不可恢复。`)) return
+    try {
+      await llmApi.deleteLocalModel(name)
+      showToast(`已删除 ${name}`)
+      refreshLocalModels()
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || '删除失败')
+    }
+  }
+
+  // ----- 数据存储位置：迁移到新目录 -----
+  const saveDataDir = async () => {
+    const p = dataDirInput.trim()
+    if (!p) {
+      setDataDirMsg('请填写绝对路径')
+      return
+    }
+    if (p === dataDir) {
+      setDataDirMsg('与当前路径相同，无需修改')
+      return
+    }
+    if (
+      !confirm(
+        `把数据目录改到：\n${p}\n\n` +
+          `会把现有数据（数据库 / 上传文件 / 缓存）复制到新位置。\n` +
+          `修改后需要【重启后端】才会生效。是否继续？`
+      )
+    )
+      return
+    setSavingDataDir(true)
+    setDataDirMsg('')
+    try {
+      const { data } = await systemApi.setDataDir(p, true)
+      setDataDirMsg(`已复制数据到 ${data.path}。请重启后端使其生效（旧位置数据仍保留，可自行删除）。`)
+    } catch (e: any) {
+      setDataDirMsg(e?.response?.data?.detail || '设置失败，请检查路径')
+    } finally {
+      setSavingDataDir(false)
+    }
+  }
+
+  const startAddProvider = () => {
+    setNavSel('cloud')
+    setProviderName('')
+    setBaseUrl('')
+    setModel('')
+    setModelsText('')
+    setKeyInput('')
+    setShowKey(false)
+    setCheckResult(null)
+    setCloudErr('')
+  }
+
+  const selectProvider = (p: LlmProvider) => {
+    setNavSel(p.id)
+    setProviderName(p.name)
+    setBaseUrl(p.base_url)
+    setModel(p.model)
+    setModelsText((p.models || []).join('\n'))
+    setKeyInput('') // 编辑时 Key 留空 = 保持原 Key
+    setShowKey(false)
+    setCheckResult(null)
+    setCloudErr('')
+  }
+
+  const saveProvider = async () => {
+    const models = parseList(modelsText)
+    if (!providerName.trim()) {
+      setCloudErr('请填写名称（如「智谱 GLM」）')
+      return
+    }
+    if (!baseUrl.trim() || !model.trim()) {
+      setCloudErr('请填写 API Host 与默认模型')
+      return
+    }
+    if (!keyInput.trim() && typeof navSel !== 'number') {
+      setCloudErr('请填写 API Key')
+      return
+    }
+    setSavingCloud(true)
+    setCloudErr('')
+    try {
+      if (typeof navSel === 'number') {
+        await llmProvidersApi.update(navSel, {
+          name: providerName.trim(),
+          base_url: baseUrl.trim(),
+          api_key: keyInput.trim() || undefined,
+          model: model.trim(),
+          models,
+        })
+      } else {
+        await llmProvidersApi.create({
+          name: providerName.trim(),
+          base_url: baseUrl.trim(),
+          api_key: keyInput.trim(),
+          model: model.trim(),
+          models,
+        })
+      }
+      showToast(typeof navSel === 'number' ? '已更新' : '接入成功')
+      refreshProviders()
+      startAddProvider()
+    } catch (e: any) {
+      setCloudErr(e?.response?.data?.detail || '保存失败，请重试')
+    } finally {
+      setSavingCloud(false)
+    }
+  }
+
+  const deleteProvider = async (id: number) => {
+    if (!confirm('删除这个已接入的 API？正在使用它的会话会回落到默认云端。')) return
+    try {
+      await llmProvidersApi.remove(id)
+      showToast('已删除')
+      refreshProviders()
+      startAddProvider()
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || '删除失败')
+    }
+  }
+
   return (
-    <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay">
       <div className={`modal settings-modal ${tab === 'api' ? 'settings-modal-api' : ''}`}>
-        <div className="modal-title">{t('settings.title')}</div>
+        <div className="modal-title-row">
+          <div className="modal-title">{t('settings.title')}</div>
+          <button className="modal-close" onClick={onClose} title="关闭" aria-label="关闭">
+            <X size={18} />
+          </button>
+        </div>
 
         <div className="settings-tabs">
           {(['appearance', 'api', 'account'] as Tab[]).map((k) => (
@@ -403,24 +591,52 @@ export default function SettingsModal({
           {tab === 'appearance' && (
             <div className="settings-pane">
               <div className="settings-row">
-                <div className="settings-label">{t('settings.theme.label')}</div>
+                <div className="settings-label">主题</div>
                 <div className="seg">
-                  {(['dark', 'light'] as const).map((v) => (
+                  {THEMES.map((th) => (
                     <button
-                      key={v}
-                      className={`seg-btn ${initialProfile.theme === v ? 'active' : ''}`}
-                      onClick={() => changeTheme(v)}
+                      key={th.value}
+                      className={`seg-btn ${initialProfile.theme === th.value ? 'active' : ''}`}
+                      onClick={() => changeTheme(th.value)}
                       disabled={saving}
                     >
-                      {t(`settings.theme.${v}`)}
+                      {th.label}
                     </button>
                   ))}
                 </div>
               </div>
-              <p className="settings-hint">{t('settings.theme.hint')}</p>
+              <p className="settings-hint">
+                亮色 / 暗色 / 护眼（米黄纸感）/ 高对比（无障碍）。主题与字号会同步到账号。
+              </p>
 
               <div className="settings-row">
-                <div className="settings-label">{t('settings.fontSize.label')}</div>
+                <div className="settings-label">强调色</div>
+                <div className="accent-row">
+                  {ACCENTS.map((a) => (
+                    <button
+                      key={a.value}
+                      type="button"
+                      className={`accent-dot ${accentColor.toLowerCase() === a.value.toLowerCase() ? 'on' : ''}`}
+                      style={{ background: a.value }}
+                      onClick={() => changeAccent(a.value)}
+                      title={a.label}
+                      aria-label={`强调色 ${a.label}`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    className="accent-custom"
+                    value={accentColor}
+                    onChange={(e) => changeAccent(e.target.value)}
+                    title="自定义强调色"
+                    aria-label="自定义强调色"
+                  />
+                </div>
+              </div>
+              <p className="settings-hint">用于按钮、选中态、聚焦框等。存本地，不跟随账号。</p>
+
+              <div className="settings-row">
+                <div className="settings-label">字号</div>
                 <div className="seg">
                   {FONT_SIZES.map((f) => (
                     <button
@@ -429,11 +645,12 @@ export default function SettingsModal({
                       onClick={() => changeFontSize(f.value)}
                       disabled={saving}
                     >
-                      {t(f.key)}
+                      {f.label}
                     </button>
                   ))}
                 </div>
               </div>
+              <p className="settings-hint">6 档字号（12 ~ 22px），全站等比缩放。</p>
             </div>
           )}
 
@@ -442,19 +659,7 @@ export default function SettingsModal({
             <div className="api-grid">
               {/* 左：服务列表 */}
               <div className="api-nav">
-                <div className="api-nav-group">模型服务</div>
-                <button
-                  className={`api-nav-item ${navSel === 'cloud' ? 'on' : ''}`}
-                  onClick={() => setNavSel('cloud')}
-                >
-                  <Cloud size={15} className="mp-ico" />
-                  <span className="api-nav-name">云端 API</span>
-                  {cloudConfigured ? (
-                    <Check size={13} className="api-nav-ok" />
-                  ) : (
-                    <span className="api-nav-badge">未配置</span>
-                  )}
-                </button>
+                <div className="api-nav-group">已接入的 API</div>
                 <button
                   className={`api-nav-item ${navSel === 'local' ? 'on' : ''}`}
                   onClick={() => setNavSel('local')}
@@ -463,8 +668,26 @@ export default function SettingsModal({
                   <span className="api-nav-name">本地 Ollama</span>
                   <Check size={13} className="api-nav-ok" />
                 </button>
+                {providers.map((p) => (
+                  <button
+                    key={p.id}
+                    className={`api-nav-item ${navSel === p.id ? 'on' : ''}`}
+                    onClick={() => selectProvider(p)}
+                  >
+                    <Cloud size={15} className="mp-ico" />
+                    <span className="api-nav-name">{p.name}</span>
+                    <span className="api-nav-model">{p.model}</span>
+                  </button>
+                ))}
+                <button
+                  className={`api-nav-item add ${navSel === 'cloud' ? 'on' : ''}`}
+                  onClick={startAddProvider}
+                >
+                  <Plus size={15} className="mp-ico" />
+                  <span className="api-nav-name">接入新 API</span>
+                </button>
                 <p className="settings-hint api-nav-hint">
-                  本地模型随 Ollama 服务自动可用，无需配置。
+                  本地模型随 Ollama 服务自动可用；云端 API 接入后可多个并存、切换使用。
                 </p>
               </div>
 
@@ -474,20 +697,58 @@ export default function SettingsModal({
                   <>
                     <div className="api-detail-head">
                       <span className="api-detail-title">本地 Ollama</span>
-                    </div>
-                    <div className="settings-kv">
-                      <span>当前模型</span>
-                      <code className="settings-mono">{localModel || '—'}</code>
+                      <button
+                        className="btn"
+                        onClick={refreshLocalModels}
+                        disabled={localLoading}
+                        title="重新扫描本机已安装的模型"
+                      >
+                        {localLoading ? (
+                          <Loader2 size={14} className="spin" />
+                        ) : (
+                          <RefreshCw size={14} />
+                        )}
+                        刷新
+                      </button>
                     </div>
                     <p className="settings-hint">
-                      本地模型无需 API Key，只要电脑上 Ollama 服务在运行即可使用，
-                      适合不联网或没有云端 Key 的场景。
+                      本地模型无需 API Key，只要电脑上 Ollama 服务在运行即可使用
+                      {localModels.length > 0 && `（当前已发现 ${localModels.length} 个）`}。
                     </p>
+                    {localErr && <div className="error">{localErr}</div>}
+                    {localModels.length === 0 && !localErr && !localLoading && (
+                      <p className="settings-hint">未发现本地模型。先在终端执行 <code>ollama pull qwen3:8b</code> 拉取。</p>
+                    )}
+                    <div className="local-model-list">
+                      {localModels.map((m) => (
+                        <div key={m} className="local-model-item">
+                          <div className="local-model-info">
+                            <Cpu size={14} className="mp-ico" />
+                            <span className="local-model-name">{m}</span>
+                            {m === localModel && <span className="local-model-badge">当前</span>}
+                          </div>
+                          <button
+                            className="btn danger tiny"
+                            onClick={() => deleteLocalModel(m)}
+                            title="从磁盘删除该模型"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </>
                 ) : (
                   <>
                     <div className="api-detail-head">
-                      <span className="api-detail-title">云端 API</span>
+                      <span className="api-detail-title">
+                        {typeof navSel === 'number' ? '编辑 API' : '接入新 API'}
+                      </span>
+                      {typeof navSel === 'number' && (
+                        <button className="btn danger" onClick={() => deleteProvider(navSel)}>
+                          <Trash2 size={13} /> 删除
+                        </button>
+                      )}
                       {checking && (
                         <span className="check-badge">
                           <Loader2 size={12} className="spin" /> 检查中…
@@ -500,9 +761,17 @@ export default function SettingsModal({
                       )}
                     </div>
                     <p className="settings-hint">
-                      接入任一 OpenAI 兼容平台。保存时会先做一次真实测连；
-                      <b>已配置过时，Key 留空表示沿用现有 Key</b>。
+                      接入任一 OpenAI 兼容平台，可同时接入多个并在聊天里切换。保存时先做真实测连；
+                      {typeof navSel === 'number' && <b>编辑时 Key 留空表示沿用现有 Key。</b>}
                     </p>
+
+                    <label className="modal-label">名称（用于区分，如「智谱 GLM」）</label>
+                    <input
+                      className="input"
+                      placeholder="智谱 GLM"
+                      value={providerName}
+                      onChange={(e) => setProviderName(e.target.value)}
+                    />
 
                     <label className="modal-label">常用平台（点击自动填充）</label>
                     <div className="preset-row">
@@ -514,6 +783,7 @@ export default function SettingsModal({
                           onClick={() => {
                             setBaseUrl(p.baseUrl)
                             setModel(p.model)
+                            if (!providerName.trim()) setProviderName(p.name)
                             setCloudErr('')
                           }}
                         >
@@ -572,8 +842,11 @@ export default function SettingsModal({
                       onChange={(e) => setBaseUrl(e.target.value)}
                     />
 
-                    <div className="api-sub-field">
-                      <label className="modal-label">代理地址</label>
+                    <details className="api-advanced">
+                      <summary>全局设置（代理 / 深度思考，对所有 API 生效）</summary>
+
+                      <div className="api-sub-field">
+                        <label className="modal-label">代理地址</label>
                       <div className="settings-row-inline">
                         <input
                           className="input"
@@ -636,12 +909,14 @@ export default function SettingsModal({
                       <div className="api-think-text">
                         <span className="modal-label">
                           深度思考
-                          {!thinkSupported && <span className="api-tag-muted">该端点不支持</span>}
+                          {!thinkSupported && <span className="api-tag-muted">该端点不确定</span>}
                         </span>
                         <p className="settings-hint">
-                          {!thinkSupported
-                            ? '当前 API Host 非阿里云百炼，不支持思考模式开关。'
-                            : '开启后模型先推理再回答，更透彻但更慢；关闭 = 响应更快。'}
+                          {thinkHint
+                            ? thinkHint
+                            : thinkSupported
+                              ? '开启后模型先推理再回答，更透彻但更慢；关闭 = 响应更快。'
+                              : '该端点深度思考能力未知，可实测确认是否有 reasoning_content。'}
                         </p>
                       </div>
                       <button
@@ -696,6 +971,13 @@ export default function SettingsModal({
                       </button>
                     </div>
 
+                    <div className="api-actions">
+                      <button className="btn" onClick={saveCloud} disabled={savingCloud}>
+                        {savingCloud ? '保存中…' : '保存全局设置'}
+                      </button>
+                    </div>
+                  </details>
+
                     {checkInfo && (
                       <p className="settings-hint api-check-info">上次检查：{checkInfo}</p>
                     )}
@@ -727,10 +1009,14 @@ export default function SettingsModal({
                     <div className="api-actions">
                       <button
                         className="btn primary"
-                        onClick={saveCloud}
+                        onClick={saveProvider}
                         disabled={checking || savingCloud}
                       >
-                        {savingCloud ? '正在测试连接…' : '保存'}
+                        {savingCloud
+                          ? '正在测试连接…'
+                          : typeof navSel === 'number'
+                            ? '保存修改'
+                            : '接入并保存'}
                       </button>
                     </div>
                   </>
@@ -825,6 +1111,36 @@ export default function SettingsModal({
                     {t('settings.pwd.save')}
                   </button>
                 </div>
+              </div>
+
+              <div className="settings-section">
+                <div className="settings-label">数据存储位置</div>
+                <div className="settings-kv">
+                  <code className="settings-mono">{dataDir || '加载中…'}</code>
+                  {dataDirSizeMb > 0 && (
+                    <span className="settings-muted">已用 {dataDirSizeMb} MB</span>
+                  )}
+                </div>
+                <div className="settings-row-inline">
+                  <input
+                    className="input"
+                    value={dataDirInput}
+                    onChange={(e) => setDataDirInput(e.target.value)}
+                    placeholder="例如 D:/ipas-data（必须绝对路径）"
+                  />
+                  <button
+                    className="btn"
+                    onClick={saveDataDir}
+                    disabled={savingDataDir || !dataDirInput.trim()}
+                  >
+                    {savingDataDir ? '迁移中…' : '迁移到此处'}
+                  </button>
+                </div>
+                <p className="settings-hint">
+                  数据库、上传文件、缓存都存放在这里。修改会把现有数据复制到新位置，
+                  <b>重启后端后生效</b>（旧位置数据会保留，可自行删除）。
+                </p>
+                {dataDirMsg && <p className="settings-hint data-dir-msg">{dataDirMsg}</p>}
               </div>
 
               <div className="settings-section">

@@ -3,10 +3,21 @@ export interface Session {
   title: string
   provider?: string
   model?: string
+  provider_id?: number | null
   active_skill_ids?: number[]
   active_kb_ids?: number[]
   created_at: string
   updated_at: string
+}
+
+export interface LlmProvider {
+  id: number
+  name: string
+  base_url: string
+  model: string
+  models: string[]
+  masked_key: string
+  created_at?: string | null
 }
 
 export interface LlmOption {
@@ -15,6 +26,10 @@ export interface LlmOption {
   label: string
   configured: boolean
   desc: string
+  /** 多 API：指向 llm_providers.id；本地 Ollama / 默认云端为 undefined */
+  provider_id?: number
+  /** 平台分组名：本地 / 阿里云百炼 / 智谱 / OpenAI / DeepSeek / 其他平台 */
+  platform?: string
 }
 
 export interface LlmConfigPayload {
@@ -153,8 +168,8 @@ export interface UserProfile {
   nickname?: string | null
   avatar?: string | null
   language: 'zh' | 'en'
-  font_size: 'small' | 'medium' | 'large'
-  theme: 'dark' | 'light'
+  font_size: string // fs12/fs14/fs16/fs18/fs20/fs22（兼容旧值 small/medium/large）
+  theme: string // light/dark/sepia/contrast
   created_at?: string
 }
 
@@ -162,8 +177,8 @@ export interface UserUpdatePayload {
   nickname?: string
   avatar?: string
   language?: 'zh' | 'en'
-  font_size?: 'small' | 'medium' | 'large'
-  theme?: 'dark' | 'light'
+  font_size?: string
+  theme?: string
   current_password?: string
   new_password?: string
 }

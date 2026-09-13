@@ -8,6 +8,7 @@
 
 import os
 import re
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,13 +22,31 @@ def _get_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+# ---------------------------------------------------------------- 数据目录
+# 所有运行时数据统一放数据目录下，便于备份、迁移与清理：
+#   <DATA_DIR>/app.db        SQLite 数据库（含 -wal / -shm）
+#   <DATA_DIR>/uploads/      用户上传的原始文件（按 u{user_id}/ 分目录）
+#   <DATA_DIR>/cache/        磁盘缓存（节假日等，随时可删）
+# 位置可用 .env 的 DATA_DIR 指定（建议绝对路径）；留空 = 默认 backend/data。
+# 改 DATA_DIR 需【重启后端】生效（本模块在导入时确定路径）。
+DEFAULT_DATA_DIR = (Path(__file__).resolve().parent.parent / "data").resolve()
+_env_data_dir = os.getenv("DATA_DIR", "").strip()
+DATA_DIR = Path(_env_data_dir).expanduser().resolve() if _env_data_dir else DEFAULT_DATA_DIR
+DATA_UPLOADS = DATA_DIR / "uploads"
+DATA_CACHE = DATA_DIR / "cache"
+for _d in (DATA_DIR, DATA_UPLOADS, DATA_CACHE):
+    _d.mkdir(parents=True, exist_ok=True)
+
 # ---------------------------------------------------------------- 安全 / JWT
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
 
 # ---------------------------------------------------------------- 数据库
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+# 默认落在 data/app.db（绝对路径，不受启动目录影响）；仍可用 .env 的 DATABASE_URL 覆盖。
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip() or (
+    "sqlite:///" + (DATA_DIR / "app.db").as_posix()
+)
 
 # ---------------------------------------------------------------- 大模型
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
@@ -38,10 +57,26 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 OLLAMA_THINK = _get_bool("OLLAMA_THINK", False)
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
 
+def _clean_env(name: str, default: str = "") -> str:
+    """读取环境变量并清理「行内注释污染」。
+
+    python-dotenv 不支持行内注释：`KEY=值  # 说明` 会把整段（含 # 说明）当成值。
+    曾因此把 CLOUD_MODEL 读成 "# 【留空】旧版单配置默认模型"，导致 cloud_configured
+    假阳性为 True、旧模型全部冒出来。这里做防御：值以 # 开头直接视为空；
+    值中含 " #" 时只取 # 之前部分。
+    """
+    raw = os.getenv(name, default) or ""
+    if raw.lstrip().startswith("#"):
+        return ""
+    if " #" in raw:
+        raw = raw.split(" #", 1)[0]
+    return raw.strip()
+
+
 # 云端 OpenAI 兼容平台
-CLOUD_API_KEY = os.getenv("CLOUD_API_KEY", "")
-CLOUD_BASE_URL = os.getenv("CLOUD_BASE_URL", "").strip() or None
-CLOUD_MODEL = os.getenv("CLOUD_MODEL", "gpt-4o-mini")
+CLOUD_API_KEY = _clean_env("CLOUD_API_KEY")
+CLOUD_BASE_URL = _clean_env("CLOUD_BASE_URL") or None
+CLOUD_MODEL = _clean_env("CLOUD_MODEL")
 
 # 云端「深度思考」开关（阿里云百炼 / DashScope 思考型模型）。
 # False = 关闭思考，首字快、日常问答足够；True = 先推理再回答，更透彻但明显更慢。
@@ -67,7 +102,11 @@ CLOUD_TRUST_ENV = _get_bool("CLOUD_TRUST_ENV", False)
 
 
 def supports_thinking(base_url: str | None) -> bool:
-    """判断该 base_url 是否属于阿里云百炼（DashScope），从而支持 enable_thinking / thinking_budget。
+    """判断该 base_url 是否属于阿里云百炼（DashScope），从而支持 enable_thinking / thinking_budget 参数。
+
+    ⚠️ 注意：这判断的是「enable_thinking 参数」这一百炼专有参数，不是「深度思考能力」。
+    深度思考（推理）多个平台都支持，但方式不同（智谱 GLM-5 走 thinking 模型、DeepSeek 走
+    reasoner 模型、豆包走 thinking 模型）。前端展示用 classify_thinking()，别用本函数。
 
     必须按「域名主体」判断，不能只看是否含 dashscope 字样：百炼的
     应用专属域名形如 https://ws-xxxx.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
@@ -76,6 +115,47 @@ def supports_thinking(base_url: str | None) -> bool:
     """
     url = (base_url or "").lower()
     return "aliyuncs.com" in url or "dashscope" in url
+
+
+def classify_thinking(base_url: str | None, model: str | None = None) -> tuple[bool, str]:
+    """判断该端点/模型是否「可能支持深度思考」，返回 (是否支持, 说明文案)。
+
+    供前端提示用，比 supports_thinking() 只看域名更准确：
+      · 模型名带 thinking/reasoner/r1/o1 等 → 推理型模型，支持；
+      · 按平台域名判断已知平台（百炼 qwen3 / 智谱 GLM-5 / DeepSeek）；
+      · 未知平台 → 不武断说「不支持」，提示可实测。
+    """
+    u = (base_url or "").lower()
+    m = (model or "").lower()
+    if any(k in m for k in ("thinking", "reasoner", "r1", "-o1", "-o3", "o1-", "o3-")):
+        return True, "该模型为推理型，支持深度思考"
+    if "aliyuncs.com" in u or "dashscope" in u:
+        return True, "阿里云百炼：qwen3 系列可开启深度思考（enable_thinking）"
+    if "bigmodel.cn" in u:
+        return True, "智谱：GLM-5.x 支持 thinking 推理模式"
+    if "deepseek.com" in u:
+        return True, "DeepSeek：deepseek-reasoner 支持思考"
+    return False, "该端点深度思考能力未知，可实测确认是否有 reasoning_content"
+
+
+def classify_platform(base_url: str | None, provider: str | None = None) -> str:
+    """按 base_url 判定平台分组名，供前端模型下拉分组展示。"""
+    if provider and provider.strip().lower() != "cloud":
+        return "本地"
+    u = (base_url or "").lower()
+    if "aliyuncs.com" in u or "dashscope" in u:
+        return "阿里云百炼"
+    if "bigmodel.cn" in u or "zhipu" in u:
+        return "智谱"
+    if "api.openai.com" in u:
+        return "OpenAI"
+    if "deepseek.com" in u:
+        return "DeepSeek"
+    if "moonshot.cn" in u:
+        return "月之暗面"
+    if "volces.com" in u or "ark.cn" in u:
+        return "豆包"
+    return "其他平台"
 
 
 # 思考模式下 max_tokens 的平台上限（百炼文档：取值范围 [1, 32768]，超出报 400）
@@ -148,12 +228,10 @@ def llm_options():
     """返回可选大模型列表（含是否已配置），供前端"切换模型"下拉框使用。
 
     本地固定一条；云端按 CLOUD_MODELS 清单逐条输出（当前 CLOUD_MODEL 始终在列）。
+    若 CLOUD_API_KEY 已清空（旧单配置已删除、迁移到多 API），则不输出默认云端清单，
+    由 /api/llm-options 接口额外追加 llm_providers 里的模型。
     """
     cloud_configured = bool(CLOUD_API_KEY and CLOUD_BASE_URL)
-
-    models = list(CLOUD_MODELS)
-    if CLOUD_MODEL and CLOUD_MODEL not in models:
-        models.insert(0, CLOUD_MODEL)  # 当前模型保证可选
 
     options = [
         {
@@ -164,6 +242,13 @@ def llm_options():
             "desc": "Ollama 本地推理，无需联网",
         }
     ]
+    if not cloud_configured:
+        return options  # 无默认云端配置：只返回本地，云端由多 API 追加
+
+    models = list(CLOUD_MODELS)
+    if CLOUD_MODEL and CLOUD_MODEL not in models:
+        models.insert(0, CLOUD_MODEL)  # 当前模型保证可选
+
     for m in models:
         options.append(
             {

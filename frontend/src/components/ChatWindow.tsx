@@ -96,6 +96,7 @@ export default function ChatWindow({
   title,
   provider,
   model,
+  providerId,
   options,
   onModelChange,
   onUnconfiguredHint,
@@ -114,8 +115,9 @@ export default function ChatWindow({
   title?: string
   provider?: string
   model?: string
+  providerId?: number | null
   options: LlmOption[]
-  onModelChange: (provider: string, model: string) => void
+  onModelChange: (provider: string, model: string, provider_id?: number) => void
   /** 点击了「未配置」的云端模型：父级提示并打开设置 */
   onUnconfiguredHint: () => void
   panelOpen: boolean
@@ -132,7 +134,10 @@ export default function ChatWindow({
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [inputH, setInputH] = useState<number | null>(null) // 手动拖动后的输入框高度（null=自动增高）
-  const [loading, setLoading] = useState(false)
+  // loading 改为「按会话」跟踪：切到别的对话时，正在后台生成的会话不应阻塞当前会话的输入。
+  // streamingSids 记录哪些会话正在生成；当前会话的 loading 由它派生。
+  const [streamingSids, setStreamingSids] = useState<Set<number>>(new Set())
+  const loading = streamingSids.has(sessionId)
   const [attaches, setAttaches] = useState<FileInfo[]>([])
   const [attaching, setAttaching] = useState(false)
   // 上传限制（类型 / 大小），用于附件按钮提示与预检
@@ -145,7 +150,11 @@ export default function ChatWindow({
   const stickToBottom = useRef(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const ctrlRef = useRef<AbortController | null>(null)
+  // 每个会话独立的 AbortController：切走不打断，切回还能继续（或停止对应会话的生成）。
+  const streamsRef = useRef<Map<number, AbortController>>(new Map())
+  // 当前「正在显示」的会话 id：流式 token 只在它等于发起会话时才写入 UI，
+  // 避免切到别的对话后，后台还在跑的流把 token 串进当前会话。
+  const activeSidRef = useRef<number | null>(sessionId)
 
   // 输入框高度：未手动拖动时按内容自动增高（最高 200px）；手动拖动后固定为用户设定高度
   useEffect(() => {
@@ -208,8 +217,10 @@ export default function ChatWindow({
     URL.revokeObjectURL(url)
   }
 
-  // 切换会话时加载历史
+  // 切换会话时加载历史。注意【不 abort 正在跑的流】：
+  // 切走只是把「显示会话」切走，后台生成继续；切回时再从后端拉最新内容。
   useEffect(() => {
+    activeSidRef.current = sessionId
     setMessages([])
     setInput('')
     setAttaches([])
@@ -284,9 +295,14 @@ export default function ChatWindow({
 
   // ---------- 流式请求核心：把 token 追加到最后一个 assistant 气泡 ----------
   const runStream = async (body: Record<string, unknown>) => {
+    const sid = sessionId // 发起流时的会话：token 只写回这个会话
     const ctrl = new AbortController()
-    ctrlRef.current = ctrl
-    setLoading(true)
+    streamsRef.current.set(sid, ctrl)
+    setStreamingSids((s) => {
+      const n = new Set(s)
+      n.add(sid)
+      return n
+    })
     try {
       const resp = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -344,108 +360,132 @@ export default function ChatWindow({
             // 注意：此分支必须唯一。此前链尾曾残留一个 else if (data.done) 死代码，
             // 导致模型标注/补 id 永远不执行、要刷新页面才能显示。
             doneReceived = true
-            if (data.provider || data.model) {
-              const pv = data.provider as string | undefined
-              const md = data.model as string | undefined
-              setMessages((m) => {
-                const c = [...m]
-                const last = c[c.length - 1]
-                if (last && last.role === 'assistant') {
-                  c[c.length - 1] = { ...last, provider: pv, model: md }
-                }
-                return c
-              })
-            }
-            const uid = data.user_id as number | undefined
-            const aid = data.assistant_id as number | undefined
-            if (uid != null || aid != null) {
-              setMessages((m) => {
-                const c = [...m]
-                if (aid != null) {
-                  for (let k = c.length - 1; k >= 0; k--) {
-                    if (c[k].role === 'assistant') {
-                      if (c[k].id == null) c[k] = { ...c[k], id: aid }
-                      break
+            if (sid === activeSidRef.current) {
+              if (data.provider || data.model) {
+                const pv = data.provider as string | undefined
+                const md = data.model as string | undefined
+                setMessages((m) => {
+                  const c = [...m]
+                  const last = c[c.length - 1]
+                  if (last && last.role === 'assistant') {
+                    c[c.length - 1] = { ...last, provider: pv, model: md }
+                  }
+                  return c
+                })
+              }
+              const uid = data.user_id as number | undefined
+              const aid = data.assistant_id as number | undefined
+              if (uid != null || aid != null) {
+                setMessages((m) => {
+                  const c = [...m]
+                  if (aid != null) {
+                    for (let k = c.length - 1; k >= 0; k--) {
+                      if (c[k].role === 'assistant') {
+                        if (c[k].id == null) c[k] = { ...c[k], id: aid }
+                        break
+                      }
                     }
                   }
-                }
-                if (uid != null) {
-                  for (let k = c.length - 1; k >= 0; k--) {
-                    if (c[k].role === 'user') {
-                      if (c[k].id == null) c[k] = { ...c[k], id: uid }
-                      break
+                  if (uid != null) {
+                    for (let k = c.length - 1; k >= 0; k--) {
+                      if (c[k].role === 'user') {
+                        if (c[k].id == null) c[k] = { ...c[k], id: uid }
+                        break
+                      }
                     }
                   }
-                }
-                return c
-              })
+                  return c
+                })
+              }
             }
             onTitleChange()
             onTodoChanged()
           } else if (typeof data.token === 'string') {
             const tok = data.token
-            setMessages((m) => {
-              const c = [...m]
-              const last = c[c.length - 1]
-              if (last && last.role === 'assistant') {
-                c[c.length - 1] = { ...last, content: last.content + tok }
-              }
-              return c
-            })
+            if (sid === activeSidRef.current) {
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant') {
+                  c[c.length - 1] = { ...last, content: last.content + tok }
+                }
+                return c
+              })
+            }
           } else if (typeof data.reasoning === 'string') {
             // 思考过程增量：与正文分开累积，单独展示
             const r = data.reasoning
-            setMessages((m) => {
-              const c = [...m]
-              const last = c[c.length - 1]
-              if (last && last.role === 'assistant') {
-                c[c.length - 1] = { ...last, reasoning: (last.reasoning || '') + r }
-              }
-              return c
-            })
+            if (sid === activeSidRef.current) {
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant') {
+                  c[c.length - 1] = { ...last, reasoning: (last.reasoning || '') + r }
+                }
+                return c
+              })
+            }
           } else if (Array.isArray(data.sources)) {
             // 知识库命中来源：挂到最后一条 assistant 消息上，回答下方展示
             const srcs: string[] = data.sources
-            setMessages((m) => {
-              const c = [...m]
-              const last = c[c.length - 1]
-              if (last && last.role === 'assistant') {
-                c[c.length - 1] = { ...last, sources: srcs }
-              }
-              return c
-            })
+            if (sid === activeSidRef.current) {
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant') {
+                  c[c.length - 1] = { ...last, sources: srcs }
+                }
+                return c
+              })
+            }
           } else if (typeof data.error === 'string') {
             // 后端异常事件：保留可读的真实原因（401/超时/参数不合法等），
             // 便于用户自助排查，而不是只看到一句笼统的"请求失败"。
             const msg = data.error
-            setMessages((m) => {
-              const c = [...m]
-              const last = c[c.length - 1]
-              if (last && last.role === 'assistant' && !last.content) {
-                c[c.length - 1] = { ...last, content: `出错了: ${msg}` }
-              }
-              return c
-            })
+            if (sid === activeSidRef.current) {
+              setMessages((m) => {
+                const c = [...m]
+                const last = c[c.length - 1]
+                if (last && last.role === 'assistant' && !last.content) {
+                  c[c.length - 1] = { ...last, content: `出错了: ${msg}` }
+                }
+                return c
+              })
+            }
           }
         }
       }
       // 流结束但没收到 done 事件（连接中途被掐断）：从服务端拉回已落库的内容，免得手动刷新
-      if (!doneReceived) recoverMessages()
+      // 仅在「当前仍显示这个会话」时才拉回，避免切走后把别的会话内容覆盖到当前界面。
+      if (!doneReceived && sid === activeSidRef.current) recoverMessages()
     } catch (err: any) {
-      // 用户点了"停止"：保留已生成的部分；其它异常标记失败
       if (err?.name !== 'AbortError') {
-        setMessages((m) => {
-          const c = [...m]
-          const last = c[c.length - 1]
-          if (last && !last.content) c[c.length - 1] = { ...last, content: '请求失败，请重试（云端可能不稳定，已自动尝试恢复）' }
-          return c
-        })
-        // 网络抖动导致流中断：后端可能已把完整/部分回答落库，主动拉回
-        recoverMessages()
+        // 非用户主动停止的异常：标记失败（仅当前显示该会话时）
+        if (sid === activeSidRef.current) {
+          setMessages((m) => {
+            const c = [...m]
+            const last = c[c.length - 1]
+            if (last && !last.content) c[c.length - 1] = { ...last, content: '请求失败，请重试（云端可能不稳定，已自动尝试恢复）' }
+            return c
+          })
+          // 网络抖动导致流中断：后端可能已把完整/部分回答落库，主动拉回
+          recoverMessages()
+        }
+      } else {
+        // 用户主动点了「停止」：后端会把已生成的部分落库，并带回这轮问答的 id。
+        // 延迟拉回带 id 的消息，让删除按钮无需刷新页面就能出现。
+        // （不立即拉：后端 GeneratorExit 里异步落库，稍等一拍再取。）
+        setTimeout(() => {
+          if (sid === activeSidRef.current) recoverMessages()
+        }, 300)
       }
     } finally {
-      setLoading(false)
-      if (ctrlRef.current === ctrl) ctrlRef.current = null
+      setStreamingSids((s) => {
+        const n = new Set(s)
+        n.delete(sid)
+        return n
+      })
+      if (streamsRef.current.get(sid) === ctrl) streamsRef.current.delete(sid)
     }
   }
 
@@ -473,7 +513,8 @@ export default function ChatWindow({
   }
 
   // ---------- 停止生成 ----------
-  const stop = () => ctrlRef.current?.abort()
+  // 只停止「当前会话」的流；别的会话若在后台生成，不受影响。
+  const stop = () => streamsRef.current.get(sessionId)?.abort()
 
   // ---------- 重新生成最后一条回答 ----------
   const regenerate = async () => {
@@ -531,7 +572,7 @@ export default function ChatWindow({
           <NotificationBell />
           <ModelPicker
             options={options}
-            value={`${provider || 'ollama'}|${model || ''}`}
+            value={`${provider || 'ollama'}|${model || ''}${providerId != null ? `|${providerId}` : ''}`}
             disabled={loading}
             onChange={onModelChange}
             onUnconfiguredHint={onUnconfiguredHint}

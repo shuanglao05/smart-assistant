@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { llmApi } from '../api'
 import type { LlmOption } from '../types'
-import { getGlobalModel, setGlobalModel } from '../globalModel'
+import { globalModelKey, setGlobalModel } from '../globalModel'
 import { toast } from '../toast'
 import ModelPicker from './ModelPicker'
 
@@ -15,23 +15,19 @@ export default function GlobalModelPicker() {
       .options()
       .then(({ data }) => setOptions(data))
       .catch(() => setOptions([]))
-    const sync = () => {
-      const g = getGlobalModel()
-      setValue(g ? `${g.provider}|${g.model}` : '')
-    }
+    // value 用 globalModelKey()，格式与 ModelPicker 的 key 一致（含 provider_id），
+    // 否则多 API 模型会因 key 对不上而不显示当前模型。
+    const sync = () => setValue(globalModelKey())
     sync()
     window.addEventListener('global-model-change', sync)
     return () => window.removeEventListener('global-model-change', sync)
   }, [])
 
-  const current =
-    value || (options[0] ? `${options[0].provider}|${options[0].model}` : '')
-
   return (
     <ModelPicker
       options={options}
-      value={current}
-      onChange={(provider, model) => setGlobalModel(provider, model)}
+      value={value}
+      onChange={(provider, model, provider_id) => setGlobalModel(provider, model, provider_id)}
       onUnconfiguredHint={() => toast('云端模型未配置：请到 设置 → API 管理 接入')}
     />
   )

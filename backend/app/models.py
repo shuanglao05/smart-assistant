@@ -59,6 +59,8 @@ class Conversation(Base):
         default=(config.OLLAMA_MODEL if config.LLM_PROVIDER == "ollama" else config.CLOUD_MODEL),
         nullable=False,
     )
+    # 多 API 接入：指向 llm_providers.id 的云端 provider；NULL = 用默认 CLOUD_* 或本地 Ollama
+    provider_id = Column(Integer, nullable=True)
     active_skill_ids = Column(JSON, default=list)  # 当前会话启用的 skill id 列表
     active_kb_ids = Column(JSON, default=list)  # 当前会话启用（参与检索）的知识库 id 列表
     created_at = Column(DateTime, default=utcnow)
@@ -218,3 +220,24 @@ class Notification(Base):
     type = Column(String(20), default="info")  # info / remind / alert / system
     is_read = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=utcnow)
+
+
+class LlmProvider(Base):
+    """云端大模型 API 接入（可多个并存，替代早期单一 CLOUD_* 配置）。
+
+    每个 provider 一套独立凭据（name / base_url / api_key / 模型清单），
+    对话时按会话选 provider + model 即可切换。本地 Ollama 不算 provider，
+    仍由 config.OLLAMA_* 控制，前端在模型下拉里作为一条特殊项展示。
+    """
+
+    __tablename__ = "llm_providers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(50), nullable=False)  # 显示名，如 "智谱 GLM"、"DeepSeek"
+    base_url = Column(String(300), nullable=False)  # OpenAI 兼容端点
+    api_key = Column(String(300), nullable=False)  # 密钥（本地明文，与 .env 现状一致）
+    model = Column(String(120), nullable=False, default="")  # 默认模型
+    models = Column(Text, nullable=True)  # 可选模型清单（逗号分隔），供切换下拉
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

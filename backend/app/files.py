@@ -29,8 +29,9 @@ from app.schemas import FileDetail, FileOut
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
-# backend/uploads/<user_id>/...
-UPLOAD_ROOT = Path(__file__).resolve().parent.parent / "uploads"
+# 上传文件根目录：backend/data/uploads/<u{user_id}>/...
+# （统一放 data/ 下便于管理；stored_path 存相对 data/ 的路径，如 uploads/u1/xxx）
+UPLOAD_ROOT = config.DATA_UPLOADS
 
 TEXT_EXTS = {".txt", ".md", ".markdown", ".csv", ".json", ".log", ".py", ".js", ".ts", ".html"}
 PDF_EXTS = {".pdf"}
@@ -41,6 +42,27 @@ MAX_BYTES = config.MAX_UPLOAD_MB * 1024 * 1024
 MAX_CONTENT_CHARS = config.MAX_CONTENT_CHARS
 
 _TEXT_PREFIX = re.compile(rb"^(\xef\xbb\xbf|\xff\xfe|\xfe\xff)?")
+
+# PDF 清洗用：判断一行是否像「新的结构块起点」（章节/条款/编号列表）。
+# 命中则说明它与上一行不是同一段，应另起一段 —— 与 rag._HEADING_RE 保持同一套特征。
+_PDF_HEADING_RE = re.compile(
+    r"^(?:"
+    r"第[一二三四五六七八九十百千零〇\d]+[章节条款部分篇]"
+    r"|[一二三四五六七八九十]+[、．.]"
+    r"|（[一二三四五六七八九十\d]+）"
+    r"|\([一二三四五六七八九十\d]+\)"
+    r"|\d+(?:\.\d+)*[、．.]?\s"
+    r"|附\s*录"
+    r"|#{1,6}\s"
+    r")"
+)
+
+
+def _looks_like_heading(line: str) -> bool:
+    """整行是否"短得像个标题"。必须限长，否则 '第一条 为了维护……' 这类
+    条文正文也会以 '第一条' 命中特征，被误判成标题而截断句子。"""
+    s = line.strip()
+    return bool(s) and len(s) <= 30 and bool(_PDF_HEADING_RE.match(s))
 
 # 供前端展示的说明文案（保证与后端实际限制一致，不靠前端硬编码）
 _TYPE_GROUPS = [
@@ -74,6 +96,102 @@ def _extract_docx(data: bytes) -> str:
     return text or "（Word 文档未提取到文本，可能是空文档）"
 
 
+def _clean_pdf_text(raw: str) -> str:
+    """归一化 pypdf 抽出的正文，把「版式换行」还原成「语义段落」。
+
+    为什么必须清洗：pypdf 按页面视觉排版抽文字，一行到了纸张右边缘就换行，
+    于是一句话常被拆成两三行。这会带来两个连锁问题：
+      ① 分片器找断点时优先命中这些"假换行"，把句子切碎；
+      ② 段落结构丢失，检索出来的片段看不出上下文关系。
+
+    中文与英文的判定规则不同（实测两者换行特征相反）：
+      - 中文行末若无标点 → 几乎必然是版式换行，接回下一行；
+      - 英文行末若无标点 → 是常态（word wrap），同样接回，但用空格连接；
+      - 中文行末若已是句末标点、且下一行以引号/编号/标题开头 → 断段。
+    合并后段落之间用空行分隔，正好对接 split_text 的段落优先切分。
+    """
+    if not raw:
+        return ""
+    # 统一换行符与全角空格
+    text = raw.replace("\r\n", "\n").replace("\r", "\n").replace("\u3000", " ")
+    # 去掉页眉页脚常见的"第 N 页 / - N -"，它们会污染分片
+    text = re.sub(r"^\s*[-—－]?\s*\d+\s*[-—－]?\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(
+        r"^\s*第\s*\d+\s*页(?:\s*/\s*共\s*\d+\s*页)?\s*$", "", text, flags=re.MULTILINE
+    )
+    text = re.sub(r"^\s*Page\s+\d+(?:\s+of\s+\d+)?\s*$", "", text, flags=re.MULTILINE | re.IGNORECASE)
+
+    lines = [ln.rstrip() for ln in text.split("\n")]
+
+    # ① 英文断词合并：行尾 "-" 且下一行以小写字母开头 → 去掉连字符直接接
+    merged: list[str] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        if cur.endswith("-") and i + 1 < len(lines) and re.match(r"^[a-z]", lines[i + 1].lstrip()):
+            lines[i] = cur[:-1] + lines[i + 1].lstrip()
+            del lines[i + 1]
+            continue
+        merged.append(cur)
+        i += 1
+
+    # ② 逐行判断是否与上一行属于同一段
+    paras: list[str] = []
+    for line in merged:
+        s = line.strip()
+        if not s:
+            if paras and paras[-1] != "":
+                paras.append("")  # 保留空行为段落分隔
+            continue
+        if not paras or paras[-1] == "":
+            paras.append(s)
+            continue
+
+        prev = paras[-1]
+        prev_tail = prev[-1]
+        # 2a 上一行是短标题（章节/条款/编号）→ 标题独立成段
+        if _looks_like_heading(prev):
+            paras.append(s)
+            continue
+        # 2b 本行是短标题 → 独立成段
+        if _looks_like_heading(s):
+            paras.append(s)
+            continue
+        # 2c 上一行以"明显未结束"的字符收尾 → 同一段（中英文都适用）
+        if prev_tail in "，,、：:（(【[《\u201c\u2018;；—-–":
+            paras[-1] = _join_lines(prev, s)
+            continue
+        # 2d 上一行已完整收句，且本行以引号/括号/大写英文词开头 → 断段
+        if prev_tail in "。！？!?…\u201d\u300d\u300f）)】]》.":
+            paras.append(s)
+            continue
+        # 2e 其余（典型：英文行末无标点的 word wrap；中文行末无标点的版式换行）
+        #    → 接回同一段
+        paras[-1] = _join_lines(prev, s)
+    return "\n".join(paras).strip()
+
+
+def _join_lines(prev: str, nxt: str) -> str:
+    """拼接被版式换行断开的两行。
+
+    - 英文/数字之间补空格（word wrap 语义）；
+    - 中文与中文直接相接（版式换行不含空格）；
+    - 中文与英文交界处，判断是否本就需要空格（如 "…law,and" 这种
+      英文标点后的续写 → 补空格；"第 3 章" 这种 → 保持原样）。
+    """
+    if not prev:
+        return nxt
+    a, b = prev[-1], nxt[0]
+    # 英文标点后接英文字母：补空格（"law,and" → "law, and"）
+    if a in ",;:." and b.isascii() and b.isalnum():
+        return prev + " " + nxt
+    ascii_a = a.isascii() and a.isalnum()
+    ascii_b = b.isascii() and b.isalnum()
+    if ascii_a and ascii_b:
+        return prev + " " + nxt
+    return prev + nxt
+
+
 def _extract_text(data: bytes, ext: str) -> str:
     """抽取正文；pdf 用 pypdf、docx 用标准库，其余按文本读取。"""
     if ext in PDF_EXTS:
@@ -84,7 +202,10 @@ def _extract_text(data: bytes, ext: str) -> str:
         try:
             reader = PdfReader(io.BytesIO(data))
             text = "\n".join((page.extract_text() or "") for page in reader.pages)
-            return text or "（PDF 未提取到文本，可能是扫描件；可先用 OCR 转成文本再上传）"
+            if not text.strip():
+                return "（PDF 未提取到文本，可能是扫描件；可先用 OCR 转成文本再上传）"
+            # PDF 的版式换行必须清洗，否则一句话被拆成多行、分片会随之碎片化
+            return _clean_pdf_text(text)
         except Exception as e:
             return f"（PDF 解析失败：{e}）"
     if ext in DOCX_EXTS:

@@ -3,16 +3,19 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 from app.auth import router as auth_router
 from app.calendar_api import router as calendar_router
 from app.chat import router as chat_router
-from app.database import init_db
+from app.database import get_db, init_db
+from app.deps import get_current_user
 from app.files import router as files_router
 from app.kb import router as kb_router
 from app.llm_config import router as llm_config_router
+from app.llm_providers import router as llm_providers_router
 from app.notifications import router as notifications_router
 from app.search import router as search_router
 from app.sessions import router as sessions_router
@@ -24,6 +27,7 @@ from app.weather import router as weather_router
 from app.notes import router as notes_router
 from app.schedules import reminder_loop, router as schedules_router
 from app.courses import router as courses_router
+from app.system import router as system_router
 
 
 def _read_version() -> str:
@@ -65,11 +69,13 @@ app.include_router(notifications_router)
 app.include_router(users_router)
 app.include_router(api_keys_router)
 app.include_router(llm_config_router)
+app.include_router(llm_providers_router)
 app.include_router(chat_router)
 app.include_router(calendar_router)
 app.include_router(notes_router)
 app.include_router(schedules_router)
 app.include_router(courses_router)
+app.include_router(system_router)
 
 
 @app.on_event("startup")
@@ -110,8 +116,67 @@ def health():
 
 
 @app.get("/api/llm-options")
-def llm_options():
-    """可选模型清单（含是否已配置），供前端切换模型 UI 使用。"""
+def llm_options(current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """可选模型清单（含多 API provider + 本地 Ollama 多模型），供前端切换模型 UI 使用。
+
+    1. 本地：调 Ollama /api/tags 列出本机所有已安装模型（含 platform='本地'）；
+    2. 默认云端 CLOUD_MODELS 来自 config.llm_options()；
+    3. 追加已接入的 llm_providers（每个 provider 的模型都列出，带 provider_id + platform）。
+    """
     from app import config
 
-    return config.llm_options()
+    from app.models import LlmProvider
+
+    # 本地多模型 + 默认云端清单（config.llm_options 里本地单条跳过，避免重复）
+    base = _local_ollama_options()
+    for o in config.llm_options():
+        if o.get("provider") != "ollama":
+            base.append(o)
+    providers = db.query(LlmProvider).filter(LlmProvider.user_id == current_user.id).all()
+    for p in providers:
+        models = [m.strip() for m in (p.models or "").split(",") if m.strip()]
+        if not models:
+            models = [p.model]
+        platform = config.classify_platform(p.base_url, "cloud")
+        for m in models:
+            base.append(
+                {
+                    "provider": "cloud",
+                    "provider_id": p.id,
+                    "model": m,
+                    "label": f"{p.name} · {m}",
+                    "configured": True,
+                    "desc": f"{p.name}（已接入）",
+                    "platform": platform,
+                }
+            )
+    return base
+
+
+def _local_ollama_options() -> list[dict]:
+    """调 Ollama /api/tags 列出本机所有本地模型；失败回退单个 OLLAMA_MODEL。"""
+    from app import config
+
+    try:
+        import requests
+
+        resp = requests.get(config.OLLAMA_BASE_URL.rstrip("/") + "/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = [m.get("name", "") for m in resp.json().get("models", []) if m.get("name")]
+    except Exception:
+        models = []
+    # 过滤掉 embedding 模型（bge-m3 等是给 RAG 用的，不是聊天模型）
+    models = [m for m in models if not any(k in m.lower() for k in ("bge", "embed", "nomic"))]
+    if not models:
+        models = [config.OLLAMA_MODEL]
+    return [
+        {
+            "provider": "ollama",
+            "model": m,
+            "label": f"本地 · {m}",
+            "configured": True,
+            "desc": "Ollama 本地推理，无需联网",
+            "platform": "本地",
+        }
+        for m in models
+    ]

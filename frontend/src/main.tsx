@@ -3,11 +3,14 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import Tooltip from './components/Tooltip'
+import { applyAccent, applyFontSize, applyTheme, getAccent, getSavedFontSize, getSavedTheme } from './theme'
 import './styles.css'
 
-// 主题初始化：默认深色，读取用户上次选择（必须在渲染前，避免闪一下浅色）
-const savedTheme = localStorage.getItem('theme') || 'dark'
-document.documentElement.setAttribute('data-theme', savedTheme)
+// 外观初始化（必须在渲染前，避免闪一下默认主题）：
+// 主题 / 字号存 localStorage（也与后端 users 表同步）；强调色存 localStorage。
+applyTheme(getSavedTheme())
+applyFontSize(getSavedFontSize())
+applyAccent(getAccent())
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

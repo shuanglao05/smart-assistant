@@ -3,10 +3,11 @@
 基于 **LangChain + LangGraph + FastAPI + React** 的多用户、多会话 AI 助理 Web 应用。
 
 助手具备**工具调用**（计算器 / 天气 / 网页搜索 / 待办 / 站内提醒）、**会话记忆**、**技能（人设）定制**、
-**附件与图片问答**（PDF / Word / 图片）、**RAG 知识库检索**、**本地 / 云端大模型一键切换**、
-**节假日与调休日历**等能力，数据持久化到 SQLite。
+**附件与图片问答**（PDF / Word / 图片）、**RAG 知识库检索**、**多平台云端 API + 本地大模型自由切换**、
+**多主题与字号**、**节假日与调休日历**等能力，数据持久化到 SQLite。
 
 > 适合作为课程设计 / 入门级 AI Agent 项目：前后端分离、代码带详细中文注释、本地零成本即可跑通。
+> 运行时数据集中存放在 `backend/data/`，可在界面里一键迁移到任意目录。
 
 ---
 
@@ -19,13 +20,16 @@
 - **思考过程**展示：推理模型（或本地开启 think）的思考内容折叠展示，与正文分离
 
 ### 大模型
-- **本地 Ollama**（默认 `qwen3:8b`，离线、免费）⇄ **云端 OpenAI 兼容平台**（阿里云百炼 / DeepSeek / 智谱 / OpenAI…）
+- **本地 Ollama**（默认 `qwen3:8b`，离线、免费）⇄ **云端 OpenAI 兼容平台**（阿里云百炼 / DeepSeek / 智谱 / 硅基流动 / OpenAI…）
+- **多 API 并存**：可同时接入多个云端平台，各自独立保存 Key / 端点；顶栏下拉**按平台分组**展示，随时切换
 - **界面内切换**：顶栏下拉自绘选择器，**按会话独立**记忆所用模型
+- **本地模型自动发现**：扫本机 Ollama 已安装的全部模型，支持切换 / 删除
 - **模型清单可维护**：预设 + 自定义，支持一键从平台 `/models` 拉取
 - 接入云端**保存前真实测连**，配置错误立刻给出原因，不会写坏现有配置
-- **深度思考开关**：一键切换思考模式（阿里云百炼 / Qwen 思考型模型）；关闭后首字响应快 10 倍以上
+- **深度思考开关**：一键切换思考模式（百炼 qwen3 / 智谱 GLM-5 / DeepSeek reasoner 等推理型模型）；按「模型名 + 平台」智能识别是否支持
 - **代理可配置 + 一键自动检测**：直连云端平台慢时，扫一下本机端口就能找到可用代理并保存，
   彻底避免"每次提问要等一两分钟"
+- **数据存储位置可改**：设置 → 账户 → 数据存储位置，可把数据库 / 上传 / 缓存迁移到任意目录
 
 ### 知识与文件
 - **附件问答**：上传 **PDF / Word(.docx) / 文本 / 代码**（`txt/md/markdown/csv/json/log/py/js/ts/html`），
@@ -35,6 +39,9 @@
 - **图片识别**：上传图片（`png / jpg / jpeg / webp / gif / bmp`）交给**多模态模型**直接看图
 - **RAG 知识库**：多个知识库、上传即**自动切分 + 向量化**（本地 `bge-m3`，零成本，长文档**分批**向量化）、
   会话内勾选参与检索、回答下方**标注引用来源**
+- **语义感知分片**：先把正文拆成最小语义单元（段落 → 小标题 → 句子）再按 500 字合并，
+  重叠区域回退的是**完整句子**；PDF 抽取后做**版式换行归一化**。
+  实测片段「上一句被腰斩」的比例从 **10.4% 降到 0.4%**
 - **按库检索策略**：每个知识库可单独设置 **Top-K**（规范 / 教材库调小求精准，会议记录库调大求召回），
   未单独设置的库跟随全局默认值；检索时**每个库各取自己的条数**再合并
 - **知识库关系图**：把「知识库 → 文档 → 知识片段」可视化（纯 SVG 绘制，可点片段看内容）
@@ -136,36 +143,34 @@ npm run dev
 # ---------- 大模型 ----------
 LLM_PROVIDER=ollama            # ollama（本地）/ cloud（云端）
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen3:8b
-OLLAMA_THINK=false             # false 关闭思考，响应快 3~5 倍；想看到思考过程可设 true
+OLLAMA_MODEL=qwen3:8b          # 工具调不准可换 qwen3:14b；机器慢可换 qwen3:4b
+OLLAMA_THINK=false             # false 关闭思考，响应快 3~5 倍
 
-# 云端（LLM_PROVIDER=cloud 或界面里接入云端时使用）
+# 云端多平台接入：推荐在界面里管理（设置 → API → 接入新 API），
+# 存数据库、可同时接入多个平台、聊天里自由切换。
+# 下面这组 CLOUD_* 是「单平台兜底配置」，一般留空即可。
 CLOUD_API_KEY=
-CLOUD_BASE_URL=                # 留空 = OpenAI 官方
-                               # 阿里云百炼：https://dashscope.aliyuncs.com/compatible-mode/v1
-                               # DeepSeek ：https://api.deepseek.com
-                               # 智谱     ：https://open.bigmodel.cn/api/paas/v4/
+CLOUD_BASE_URL=                # OpenAI 兼容端点：
+                               #   智谱       https://open.bigmodel.cn/api/paas/v4
+                               #   阿里云百炼 https://dashscope.aliyuncs.com/compatible-mode/v1
+                               #   DeepSeek   https://api.deepseek.com/v1
 CLOUD_MODEL=qwen-plus
-# 界面「切换模型」下拉里的云端模型清单（逗号分隔）
 CLOUD_MODELS=qwen3.8-max,qwen-max,qwen-plus,qwen-flash,deepseek-v3.2,glm-5.2,kimi-k3,qwen3-vl-plus
+VISION_MODEL=qwen3-vl-plus     # 多模态视觉模型（图片识别 / 课表截图导入）
 
-# 多模态视觉模型（图片识别 / 课表截图导入），必须支持图片输入
-VISION_MODEL=qwen3-vl-plus
-
-# 云端「深度思考」开关（仅阿里云百炼 / Qwen 思考型模型有效）
-CLOUD_ENABLE_THINKING=false    # 默认关：首字响应快得多；开则先推理更透彻但明显更慢
+# ---------- 深度思考（仅推理型模型有效）----------
+CLOUD_ENABLE_THINKING=false    # 默认关：首字快；开则先推理更透彻但明显更慢
 CLOUD_THINKING_BUDGET=0        # 思维链上限 token，0 = 平台默认（约 4000）
 
-# 云端网络（直连慢时必须配，否则每次提问要等一两分钟）
-CLOUD_PROXY_URL=               # 代理地址如 http://127.0.0.1:7890；留空 = 跟随环境变量 / 直连
-                               # 界面里有「自动检测」：设置 → API 管理 → 代理地址
+# ---------- 云端网络（直连慢时必须配）----------
+CLOUD_PROXY_URL=               # 如 http://127.0.0.1:7890；留空 = 跟随环境变量 / 直连
 CLOUD_TRUST_ENV=false          # true = 强制绕过代理直连（代理缓冲 SSE 时用）
 
 # ---------- RAG 知识库 ----------
 EMBED_PROVIDER=ollama
 EMBED_MODEL=bge-m3
-RAG_CHUNK_SIZE=500             # 每个知识片段的目标字符数
-RAG_CHUNK_OVERLAP=80           # 相邻片段重叠字符数
+RAG_CHUNK_SIZE=500             # 每个知识片段的目标字符数（按语义单元合并凑满，不切在句中）
+RAG_CHUNK_OVERLAP=80           # 相邻片段重叠字符数（回退完整句子，不切断上一句）
 RAG_TOP_K=4                    # 全局默认检索片段数（Top-K）；每个库可单独覆盖
 RAG_EMBED_BATCH=32             # 向量化批大小（长文档分批，一次发太多会超时）
 RAG_MAX_TOTAL_CHUNKS=30        # 单次检索片段总数上限（多库合并后防爆上下文）
@@ -174,12 +179,20 @@ RAG_MAX_TOTAL_CHUNKS=30        # 单次检索片段总数上限（多库合并�
 MAX_UPLOAD_MB=50               # 单文件大小上限（PDF / Word(.docx) / 文本 / 图片）
 MAX_CONTENT_CHARS=500000       # 抽取正文上限（同时决定入库索引量）
 
+# ---------- 数据存储位置 ----------
+DATA_DIR=                      # 留空 = backend/data/（数据库 / 上传文件 / 缓存都在这里）
+                               # 也可在界面改：设置 → 账户 → 数据存储位置（需重启后端）
+DATABASE_URL=                  # 留空 = <数据目录>/app.db
+
 # ---------- 其他 ----------
 SECRET_KEY=change-me-to-a-random-string
-DATABASE_URL=sqlite:///./app.db
 AMAP_API_KEY=                  # 天气（可选，高德）
 OPENWEATHERMAP_API_KEY=        # 天气（可选，备用）
 ```
+
+> ⚠️ **写 `.env` 时的坑**：`python-dotenv` 不支持行内注释。上表为了可读性把说明写在了行尾，
+> 实际写 `.env` 时**注释必须另起一行**，否则「# 说明」会被当作配置值（本项目真实踩过的坑）。
+> 最稳妥的做法：直接复制 `backend/.env.example`（里面注释均为独立行）。
 
 > **模型名要和平台一致**：同一个模型在不同平台叫法不同（例如百炼是 `deepseek-v3.2`，DeepSeek 官方是 `deepseek-chat`）。
 > 填错时保存前的测连会直接告诉你原因。
@@ -193,44 +206,50 @@ smart-assistant/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py            入口：CORS + 路由注册 + 启动建表
-│   │   ├── config.py          集中配置（模型 / JWT / DB / 工具 Key / 可选模型清单）
+│   │   ├── config.py          集中配置（模型 / JWT / DB / 数据目录 / 工具 Key）
 │   │   ├── database.py        engine / SessionLocal / init_db（含增量 ALTER 迁移）
-│   │   ├── models.py          ORM：User/Conversation/Message/TodoItem/Skill/FileItem/Notification/KbCollection/KbChunk
+│   │   ├── models.py          ORM：User/Conversation/Message/TodoItem/Skill/FileItem/Notification/KbCollection/KbChunk/LlmProvider
 │   │   ├── schemas.py         Pydantic 请求响应模型
 │   │   ├── deps.py            JWT → 当前用户
 │   │   ├── auth.py            注册 / 登录
 │   │   ├── users.py           个人资料（昵称 / 头像 / 主题 / 字号 / 语言 / 改密）
-│   │   ├── sessions.py        会话 CRUD + 消息列表
+│   │   ├── sessions.py        会话 CRUD + 消息列表 + 模型切换
 │   │   ├── chat.py            聊天接口（流式 / 非流式，核心）
-│   │   ├── agent_manager.py   Agent 工厂 + 会话级缓存 + 共享记忆
+│   │   ├── agent_manager.py   Agent 工厂 + 会话级缓存 + 共享记忆 + 代理保活
 │   │   ├── tools.py           工具集（计算 / 天气 / 搜索 / 待办 / 通知 / 知识库检索）
 │   │   ├── rag.py             RAG 核心：切分 / 向量化 / 检索
 │   │   ├── kb.py              知识库与文档管理 + 关系图数据
 │   │   ├── files.py           文件上传 / 详情（上传即建索引）
+│   │   ├── llm_providers.py   多 API 接入管理（增删改查 + 测连，Key 脱敏）
+│   │   ├── llm_config.py      单平台兜底配置 / 代理检测 / 本地模型列表
+│   │   ├── system.py          系统设置（数据存储位置查看 / 迁移）
 │   │   ├── skills.py          技能 CRUD
 │   │   ├── todos.py           待办 CRUD
 │   │   ├── notifications.py   站内通知
 │   │   ├── weather.py         天气接口
 │   │   ├── search.py          跨会话历史搜索
-│   │   ├── llm_config.py      运行时切换 / 配置云端模型
 │   │   ├── notes.py           智能笔记 CRUD + AI 归纳（/summarize）
 │   │   ├── schedules.py       日程 CRUD + 后台提醒协程
 │   │   ├── courses.py         课表 CRUD + 智能导入（/import，支持图片）
 │   │   ├── calendar_api.py    节假日 / 调休数据（timor.tech + 磁盘缓存 + 兜底）
 │   │   └── api_keys.py        当前 API 配置（Key 脱敏）
+│   ├── data/                  ★ 运行时数据（数据库 / 上传 / 缓存，不入库）
+│   │   ├── app.db             SQLite 数据库
+│   │   ├── uploads/           用户上传的文件
+│   │   └── cache/             磁盘缓存（节假日等）
 │   ├── requirements.txt
-│   ├── .env.example           ← 配置模板（真实 .env 不入库）
-│   └── uploads/               用户上传（不入库）
+│   └── .env.example           ← 配置模板（真实 .env 不入库）
 ├── frontend/
 │   ├── src/
 │   │   ├── api/               axios 实例 + 接口封装
-│   │   ├── components/        布局与组件（ChatWindow/ModelPicker/KbGraph/GridZoom…）
+│   │   ├── components/        布局与组件（ChatWindow/ModelPicker/SettingsModal/GlobalModelPicker…）
 │   │   ├── pages/             功能页（笔记/日程/课表/天气/技能/待办/计时器/日历/知识库）
+│   │   ├── theme.ts           主题 / 字号 / 强调色（4 主题 + 6 档字号 + 自定义色）
+│   │   ├── globalModel.ts     全局模型选择（含 provider_id，localStorage + 事件同步）
 │   │   ├── chime.ts           提示音合成（Web Audio，6 种音色）
-│   │   ├── globalModel.ts     全局模型选择（localStorage + 事件同步）
 │   │   ├── toast.ts           全局轻提示
 │   │   ├── types.ts           全局类型
-│   │   └── styles.css         全局样式（CSS 变量 + 双主题）
+│   │   └── styles.css         全局样式（CSS 变量 + 4 主题）
 │   ├── package.json
 │   └── vite.config.ts         /api 代理到后端
 ├── docs/                      文档（安装指南 / 结构解析 / 分享介绍 / 详细开发文档）
@@ -318,10 +337,13 @@ smart-assistant/
 ## 隐私与数据说明
 
 - 真实密钥只放在 `backend/.env`，**已在 `.gitignore` 中忽略**，不会进入版本库。
-- 数据库 `backend/app.db`、用户上传 `backend/uploads/` 同样被忽略，**不会上传到仓库**。
+- 运行时数据统一放在 `backend/data/`（数据库 `app.db`、上传 `uploads/`、缓存 `cache/`），
+  **已被 `.gitignore` 忽略，不会上传到仓库**。
 - `frontend/.env`、`*.log`、`node_modules/`、`venv/`、`dist/` 均不参与提交。
-- 想清空所有本地数据：删除 `backend/app.db` 与 `backend/uploads/` 即可（重启后端会重新建表）。
-- 日历备忘、功能页尺寸等偏好存在**浏览器 localStorage**（不上传服务器，换设备不同步）。
+- 想清空所有本地数据：删除 `backend/data/` 整个目录即可（重启后端会重新建目录与表）。
+- 数据目录位置可改：设置 → 账户 → 数据存储位置（或 `.env` 里的 `DATA_DIR`，改完需重启后端）。
+- 主题 / 字号存**服务器账号**（换设备自动同步）；强调色、界面布局、全局模型选择存
+  **浏览器 localStorage**（不上传服务器，换设备不同步）。
 
 ### 开源前自查清单（重要）
 

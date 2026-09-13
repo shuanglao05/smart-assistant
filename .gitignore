@@ -5,14 +5,21 @@ venv/
 .venv/
 *.db
 *.sqlite3
+# SQLite WAL 模式的运行时文件（随数据库自动生成，不要入库）
+*.db-shm
+*.db-wal
+# 数据库备份（清理/迁移前的手工快照，不入库）
+*.db.bak*
+*.db.bak-*
 
 # 运行时日志
 *.log
 
-# 运行时上传的附件
-backend/uploads/
+# 运行时数据目录（数据库 / 上传文件 / 缓存统一在这里，不入库）
+backend/data/
 
-# 运行时缓存（节假日数据等，可随时重新拉取）
+# 旧路径（迁移前的残留目录，保留以防误提交）
+backend/uploads/
 backend/.cache/
 
 # 环境变量（真实密钥，绝不入库）

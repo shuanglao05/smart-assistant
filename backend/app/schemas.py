@@ -76,6 +76,7 @@ class SessionOut(BaseModel):
     title: str
     provider: str = "ollama"
     model: str = ""
+    provider_id: int | None = None  # 多 API：指向 llm_providers.id；None = 本地 Ollama 或默认云端
     active_skill_ids: list[int] = []
     active_kb_ids: list[int] = []
     created_at: datetime
@@ -86,6 +87,7 @@ class SessionUpdate(BaseModel):
     title: str | None = None
     provider: str | None = None
     model: str | None = None
+    provider_id: int | None = None  # 多 API：选择某个已接入的云端 provider
     active_skill_ids: list[int] | None = None
     active_kb_ids: list[int] | None = None
 
@@ -360,3 +362,38 @@ class CourseImportRequest(BaseModel):
     image: str | None = None  # 图片 data URL（data:image/png;base64,...）
     provider: str | None = None  # 可选：前端传入的全局模型
     model: str | None = None
+
+
+# ---------------------------------------------------------------- 多 API 接入
+class LlmProviderCreate(BaseModel):
+    """接入一个新的云端 API provider。"""
+
+    name: str = Field(min_length=1, max_length=50)
+    base_url: str = Field(min_length=1, max_length=300)
+    api_key: str = Field(min_length=1, max_length=300)
+    model: str = Field(min_length=1, max_length=120)  # 默认模型
+    models: list[str] = []  # 可选模型清单
+
+
+class LlmProviderUpdate(BaseModel):
+    """编辑已接入的 provider；api_key 留空 = 保持原 Key 不变。"""
+
+    name: str | None = Field(default=None, max_length=50)
+    base_url: str | None = Field(default=None, max_length=300)
+    api_key: str | None = None  # 留空 = 不改
+    model: str | None = Field(default=None, max_length=120)
+    models: list[str] | None = None
+
+
+class LlmProviderOut(BaseModel):
+    """已接入 provider（api_key 脱敏，只回传掩码）。"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    base_url: str
+    model: str
+    models: list[str] = []
+    masked_key: str = ""  # 形如 sk-...xxxx
+    created_at: datetime | None = None
