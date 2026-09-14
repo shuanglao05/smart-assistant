@@ -5,25 +5,29 @@
 云端走 langchain-openai 的 ChatOpenAI（兼容阿里云百炼 / 智谱 / DeepSeek / 硅基流动 / OpenAI 官方）。
 
 关于记忆（重要）：
-  记忆由模块级唯一的 _CHECKPOINTER（MemorySaver）承载，所有 Agent 共用同一份，
-  按 thread_id 天然隔离到各自会话。这样"切换模型 / 技能 / 知识库"导致 Agent 重建时，
-  对话历史仍然接得上（若每个 Agent 各建一份记忆，一换模型就会"失忆"）。
+  记忆由模块级唯一的 _CHECKPOINTER（SqliteSaver，持久化到 data/checkpoints.db）承载，
+  所有 Agent 共用同一份，按 thread_id 天然隔离到各自会话。这样"切换模型 / 技能 / 知识库"
+  导致 Agent 重建时，对话历史仍然接得上（若每个 Agent 各建一份记忆，一换模型就会"失忆"）；
+  且重启后端也不丢记忆。
   缓存键 = (会话 id, provider, model, 启用技能, 参与检索的知识库)，任一变化才重建 Agent。
 """
 
 import inspect
 import os
 import socket
+import sqlite3
 import subprocess
 from urllib.parse import urlparse
 
 import httpx
 
 # ── LangGraph 的两个核心 import ──
-# MemorySaver：LangGraph 提供的"内存检查点"。它会在 agent 运行结束后，
-# 把这一轮对话的状态（消息列表）保存进内存，下一次同一个会话再调用时
-# 就能"接着聊"，实现会话记忆（多轮上下文）。
-from langgraph.checkpoint.memory import MemorySaver
+# SqliteSaver：LangGraph 提供的「持久化检查点」。它把每轮对话的状态（消息列表）
+# 写进 SQLite 文件（data/checkpoints.db），带来两个好处：
+#   · 重启后端，会话记忆【不丢】（早期用 MemorySaver 时，进程一退出就"失忆"，
+#     表现为：昨晚聊过的内容，今早问 AI 却说"我看不到之前的对话记录"）；
+#   · 内置锁 + check_same_thread=False，可安全地被多线程请求共用。
+from langgraph.checkpoint.sqlite import SqliteSaver
 # create_react_agent：LangGraph 预置的"ReAct 智能体"工厂函数。
 # ReAct = Reasoning（推理）+ Acting（行动）。它会自动循环做一件事：
 #   1) 让大模型看当前消息，决定"是直接回答"还是"先调用某个工具"；
@@ -50,9 +54,19 @@ from app.tools import (
 # 重复提问时直接复用缓存即可，避免反复创建。
 agent_cache: dict[int, object] = {}  # conversation_id -> agent
 
-# 全局共享一个 MemorySaver：所有 Agent（包括切换模型 / 技能 / 知识库后重建的）共用同一份记忆，
+# 全局共享一个 SqliteSaver：所有 Agent（包括切换模型 / 技能 / 知识库后重建的）共用同一份记忆，
 # 这样"换模型"时对话历史不会丢。记忆按 thread_id（= 会话 id）天然隔离，不同会话互不干扰。
-_CHECKPOINTER = MemorySaver()
+#
+# 【为什么改成持久化】早期用 MemorySaver（纯内存），后端一重启所有会话记忆就没了，
+# 于是出现「界面上还看得到昨晚的聊天记录，AI 却说不知道自己聊过什么」的矛盾。
+# 换成 SqliteSaver 后，记忆写进 data/checkpoints.db，重启也能接上。
+#
+# 文件位置放在【数据目录】里：跟随「设置 → 账户 → 数据存储位置」一起迁移。
+# ⚠️ check_same_thread=False 是必须的：FastAPI 用线程池处理请求，同一个连接会被
+#    不同线程使用；SqliteSaver 内部有锁保证并发安全。
+_CHECKPOINT_DB = config.DATA_DIR / "checkpoints.db"
+_ckpt_conn = sqlite3.connect(str(_CHECKPOINT_DB), check_same_thread=False)
+_CHECKPOINTER = SqliteSaver(_ckpt_conn)
 
 # 云端专用 HTTP 客户端（模块级单例，懒创建）。
 #

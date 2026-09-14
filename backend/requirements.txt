@@ -25,6 +25,7 @@ langchain-core>=0.3
 langchain-openai>=0.2     # 云端 OpenAI 兼容平台（智谱/DeepSeek/硅基流动/官方）
 langchain-ollama>=0.3     # 本地 Ollama（走原生 /api/chat，才能关闭 qwen3 的 thinking）
 langgraph>=0.2
+langgraph-checkpoint-sqlite>=2.0  # 会话记忆持久化（SqliteSaver）：重启后端不丢 AI 上下文
 
 # ---- 测试 ----
 pytest>=8.0

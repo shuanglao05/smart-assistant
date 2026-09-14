@@ -139,6 +139,7 @@ def llm_options(current_user=Depends(get_current_user), db: Session = Depends(ge
             models = [p.model]
         platform = config.classify_platform(p.base_url, "cloud")
         for m in models:
+            cw = config.context_window_of(m, "cloud")
             base.append(
                 {
                     "provider": "cloud",
@@ -148,6 +149,8 @@ def llm_options(current_user=Depends(get_current_user), db: Session = Depends(ge
                     "configured": True,
                     "desc": f"{p.name}（已接入）",
                     "platform": platform,
+                    "context_window": cw,
+                    "context_window_text": config.format_context_window(cw),
                 }
             )
     return base
@@ -177,6 +180,8 @@ def _local_ollama_options() -> list[dict]:
             "configured": True,
             "desc": "Ollama 本地推理，无需联网",
             "platform": "本地",
+            "context_window": config.OLLAMA_NUM_CTX,
+            "context_window_text": config.format_context_window(config.OLLAMA_NUM_CTX),
         }
         for m in models
     ]

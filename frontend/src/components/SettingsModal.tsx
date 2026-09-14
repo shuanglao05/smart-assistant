@@ -97,6 +97,12 @@ export default function SettingsModal({
   const [localModels, setLocalModels] = useState<string[]>([]) // 本机 Ollama 全部模型
   const [localLoading, setLocalLoading] = useState(false)
   const [localErr, setLocalErr] = useState('')
+  // 上下文窗口（本地 Ollama 的 num_ctx）
+  const [ctxNum, setCtxNum] = useState(8192)
+  const [ctxPresets, setCtxPresets] = useState<number[]>([2048, 4096, 8192, 16384, 32768])
+  const [ctxRange, setCtxRange] = useState({ min: 512, max: 131072 })
+  const [ctxNote, setCtxNote] = useState('')
+  const [savingCtx, setSavingCtx] = useState(false)
   const [providers, setProviders] = useState<LlmProvider[]>([])
   const [providerName, setProviderName] = useState('')
   const [keyInput, setKeyInput] = useState('')
@@ -187,6 +193,7 @@ export default function SettingsModal({
       })
       .catch(() => {})
     refreshLocalModels()
+    refreshContextWindow()
   }, [open, tab])
 
   // 切到外观 tab 即应用主题/字号（语言已移除，固定中文）
@@ -429,8 +436,7 @@ export default function SettingsModal({
   }
 
   // ----- 本地 Ollama 模型：列出 / 删除 -----
-  const refreshLocalModels = () => {
-    setLocalLoading(true)
+  const refreshLocalModels = () => {    setLocalLoading(true)
     setLocalErr('')
     llmApi
       .localModels()
@@ -450,6 +456,37 @@ export default function SettingsModal({
       refreshLocalModels()
     } catch (e: any) {
       alert(e?.response?.data?.detail || '删除失败')
+    }
+  }
+
+  // ----- 上下文窗口（本地 Ollama 的 num_ctx）：读取 / 保存 -----
+  const refreshContextWindow = () => {
+    llmApi
+      .getContextWindow()
+      .then(({ data }) => {
+        setCtxNum(data.ollama_num_ctx)
+        setCtxPresets(data.presets)
+        setCtxRange({ min: data.min, max: data.max })
+        setCtxNote(data.note)
+      })
+      .catch(() => {})
+  }
+
+  const saveContextWindow = async (n: number) => {
+    const v = Math.round(n)
+    if (!Number.isFinite(v) || v < ctxRange.min || v > ctxRange.max) {
+      showToast(`范围需在 ${ctxRange.min} ~ ${ctxRange.max}`)
+      return
+    }
+    setSavingCtx(true)
+    try {
+      await llmApi.setContextWindow(v)
+      setCtxNum(v)
+      showToast(`上下文窗口已设为 ${v}`)
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || '保存失败')
+    } finally {
+      setSavingCtx(false)
     }
   }
 
@@ -656,6 +693,7 @@ export default function SettingsModal({
 
           {/* ---------- API 管理（ChatBox 式双栏） ---------- */}
           {tab === 'api' && (
+            <>
             <div className="api-grid">
               {/* 左：服务列表 */}
               <div className="api-nav">
@@ -675,8 +713,12 @@ export default function SettingsModal({
                     onClick={() => selectProvider(p)}
                   >
                     <Cloud size={15} className="mp-ico" />
-                    <span className="api-nav-name">{p.name}</span>
-                    <span className="api-nav-model">{p.model}</span>
+                    <span className="api-nav-name" title={p.name}>
+                      {p.name}
+                    </span>
+                    <span className="api-nav-model" title={p.model}>
+                      {p.model}
+                    </span>
                   </button>
                 ))}
                 <button
@@ -724,7 +766,9 @@ export default function SettingsModal({
                         <div key={m} className="local-model-item">
                           <div className="local-model-info">
                             <Cpu size={14} className="mp-ico" />
-                            <span className="local-model-name">{m}</span>
+                            <span className="local-model-name" title={m}>
+                              {m}
+                            </span>
                             {m === localModel && <span className="local-model-badge">当前</span>}
                           </div>
                           <button
@@ -1023,6 +1067,44 @@ export default function SettingsModal({
                 )}
               </div>
             </div>
+
+            {/* 上下文窗口（本地 Ollama 的 num_ctx）：云端模型的窗口由平台决定、不可调 */}
+            <div className="settings-section ctx-window">
+              <div className="settings-label">上下文窗口（本地 Ollama）</div>
+              <p className="settings-hint">{ctxNote}</p>
+              <div className="ctx-presets">
+                {ctxPresets.map((p) => (
+                  <button
+                    key={p}
+                    className={`preset-chip ${ctxNum === p ? 'active' : ''}`}
+                    onClick={() => saveContextWindow(p)}
+                    disabled={savingCtx}
+                  >
+                    {p >= 1024 ? `${Math.round(p / 1024)}K` : p}
+                  </button>
+                ))}
+              </div>
+              <div className="ctx-input-row">
+                <input
+                  className="input ctx-input"
+                  type="number"
+                  value={ctxNum}
+                  min={ctxRange.min}
+                  max={ctxRange.max}
+                  onChange={(e) => setCtxNum(Number(e.target.value))}
+                />
+                <span className="settings-muted">
+                  token（{ctxRange.min} ~ {ctxRange.max}）
+                </span>
+                <button className="btn" onClick={() => saveContextWindow(ctxNum)} disabled={savingCtx}>
+                  {savingCtx ? '保存中…' : '保存'}
+                </button>
+              </div>
+              <p className="settings-hint">
+                改完【下一条消息即刻生效】（会自动重建会话）。数值越大越吃内存，8K 一般够用。
+              </p>
+            </div>
+            </>
           )}
 
           {/* ---------- 账户 ---------- */}

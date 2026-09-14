@@ -30,6 +30,10 @@ export interface LlmOption {
   provider_id?: number
   /** 平台分组名：本地 / 阿里云百炼 / 智谱 / OpenAI / DeepSeek / 其他平台 */
   platform?: string
+  /** 上下文窗口大小（token 数）；未知为 null */
+  context_window?: number | null
+  /** 上下文窗口的易读文本，如 "8K" / "128K" / "1M" */
+  context_window_text?: string
 }
 
 export interface LlmConfigPayload {

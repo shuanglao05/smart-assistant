@@ -197,6 +197,60 @@ CLOUD_MODELS: list[str] = (
     parse_model_list(os.getenv("CLOUD_MODELS", "")) or list(_DEFAULT_CLOUD_MODELS)
 )
 
+# ---------------------------------------------------------------- 上下文窗口（界面标注用）
+# 用于让界面标出「这个模型最多能记住多少 token（上下文窗口）」。
+#   · 本地 Ollama：直接用 OLLAMA_NUM_CTX（我们显式设置的值，准确）；
+#   · 云端：各平台没有统一的查询接口，这里按【模型名模糊匹配】给参考值
+#     （同一模型在不同平台/版本可能略有差异，仅作提示）。
+MODEL_CONTEXT_WINDOWS: list[tuple[str, int]] = [
+    # 阿里云百炼 / Qwen 系
+    ("qwen-flash", 1_000_000),
+    ("qwen3-max", 262_144),
+    ("qwen3-coder", 262_144),
+    ("qwen3-vl", 131_072),
+    ("qwen-max", 131_072),
+    ("qwen-plus", 131_072),
+    ("qwen3", 131_072),
+    ("qwen", 131_072),
+    # 智谱 GLM
+    ("glm-5", 131_072),
+    ("glm-4.6", 200_000),
+    ("glm-4", 131_072),
+    # DeepSeek
+    ("deepseek", 131_072),
+    # Kimi / Moonshot
+    ("kimi", 262_144),
+    ("moonshot", 131_072),
+]
+
+
+def context_window_of(model: str | None, provider: str | None = None) -> int | None:
+    """返回模型的上下文窗口大小（token 数）；未知返回 None。
+
+    本地 Ollama 直接返回 OLLAMA_NUM_CTX；云端按模型名模糊匹配参考表（大小写不敏感）。
+    """
+    if (provider or "").strip().lower() == "ollama":
+        return OLLAMA_NUM_CTX
+    m = (model or "").strip().lower()
+    if not m:
+        return None
+    for key, size in MODEL_CONTEXT_WINDOWS:
+        if key in m:
+            return size
+    return None
+
+
+def format_context_window(n: int | None) -> str:
+    """把 token 数格式化成易读形式：8192 → '8K'；131072 → '128K'；1000000 → '1M'。"""
+    if not n:
+        return "—"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:g}M"
+    if n >= 1_000:
+        return f"{n / 1024:.0f}K"
+    return str(n)
+
+
 # ---------------------------------------------------------------- Embedding（RAG 知识库）
 EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "ollama").strip().lower()
 EMBED_BASE_URL = os.getenv("EMBED_BASE_URL", "http://localhost:11434/v1")
@@ -240,6 +294,8 @@ def llm_options():
             "label": f"本地 · {OLLAMA_MODEL}",
             "configured": True,
             "desc": "Ollama 本地推理，无需联网",
+            "context_window": OLLAMA_NUM_CTX,
+            "context_window_text": format_context_window(OLLAMA_NUM_CTX),
         }
     ]
     if not cloud_configured:
@@ -250,6 +306,7 @@ def llm_options():
         models.insert(0, CLOUD_MODEL)  # 当前模型保证可选
 
     for m in models:
+        cw = context_window_of(m, "cloud")
         options.append(
             {
                 "provider": "cloud",
@@ -257,6 +314,8 @@ def llm_options():
                 "label": f"云端 · {m}",
                 "configured": cloud_configured,
                 "desc": "OpenAI 兼容云端大模型（需配置 Key）",
+                "context_window": cw,
+                "context_window_text": format_context_window(cw),
             }
         )
     return options
@@ -265,15 +324,25 @@ def llm_options():
 # ---------------------------------------------------------------- Agent 提示词
 SYSTEM_PROMPT = (
     "你是一个乐于助人的中文智能个人助理。\n"
-    "当用户的需求可以用工具完成时，必须调用工具，不要自己编造结果。\n"
-    "- 需要算数：用 calculator\n"
-    "- 需要查天气：当前实况用 get_weather；问《未来几天/明天/后天天气》用 get_weather_forecast（days 为天数，1~4）\n"
-    "  两者城市名都支持中文（如 '北京'）或英文\n"
-    "- 需要记事情或查看待办：用 add_todo / list_todos\n"
-    "- 需要给用户发站内提醒/通知（铃铛）：用 notify_user（title 简短，如《记得喝水》）\n"
-    "- 需要查互联网资料：用 search_web\n"
-    "- 需要查用户自己上传的资料/知识库（笔记、报告、说明书、规范等）：用 search_knowledge_base\n"
-    "- 需要画流程图/时序图/关系图，或柱状图/折线图等图表：用 ```mermaid 代码块输出"
+    "\n"
+    "【工具使用原则】（重要）\n"
+    "1. 只在用户【明确要求执行某个动作】时才调用工具；仅仅聊天、提问、陈述、\n"
+    "   或顺口提到某件事（如「我要背《望岳》」「这个我不会」），一律不要调用工具，\n"
+    "   直接用文字回答即可。\n"
+    "2. 会【写入数据】的操作要格外谨慎——尤其是 add_todo（新增待办）和\n"
+    "   notify_user（发通知）：必须用户明确表达「帮我记/加进待办」「提醒我」等意图\n"
+    "   才执行；拿不准时先问一句「需要我帮你记成待办吗？」，不要擅自写入。\n"
+    "3. 不要编造结果；调用了工具就基于真实返回值回答，且不要复述原始数据。\n"
+    "\n"
+    "【工具清单】\n"
+    "- 算数：calculator\n"
+    "- 天气：当前实况 get_weather；未来几天（days 1~4）get_weather_forecast；城市名支持中英文\n"
+    "- 待办：用户明确要「记一条待办 / 加进待办清单」用 add_todo；明确要「看看待办」用 list_todos\n"
+    "- 提醒：用户明确要「提醒我 / 发个通知」用 notify_user（title 简短）\n"
+    "- 联网资料：search_web\n"
+    "- 用户上传的资料/知识库（笔记、报告、说明书、规范等）：search_knowledge_base\n"
+    "- 画图（流程图/时序图/关系图/柱状图/折线图）：用 ```mermaid 代码块输出"
     "（流程图 graph TD/LR，时序图 sequenceDiagram，柱状图/折线图 xychart-beta），不要用文字描述图形。\n"
-    "回答使用简体中文，保持简洁，不要复述工具返回的原始数据。"
+    "\n"
+    "回答使用简体中文，保持简洁。"
 )

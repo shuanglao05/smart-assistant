@@ -23,6 +23,53 @@ import { filesApi, sessionApi, type FileLimits } from '../api'
 import type { FileInfo, LlmOption, Message } from '../types'
 import MessageBubble from './MessageBubble'
 import NotificationBell from './NotificationBell'
+
+/** 导出格式：Markdown / 纯文本 / JSON / 网页（可在浏览器里「打印 → 另存为 PDF」）。 */
+type ExportFormat = 'md' | 'txt' | 'json' | 'html'
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 生成自带样式的 HTML 版对话（适合分享 / 打印成 PDF）。 */
+function buildConversationHtml(
+  title: string,
+  date: Date,
+  msgs: { role: string; content: string }[]
+): string {
+  const body = msgs
+    .map(
+      (m) => `
+    <div class="msg ${m.role}">
+      <div class="who">${m.role === 'user' ? '我' : 'AI'}</div>
+      <div class="text">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>
+    </div>`
+    )
+    .join('')
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;max-width:820px;margin:40px auto;padding:0 22px;color:#222;line-height:1.75}
+  h1{font-size:20px;border-bottom:1px solid #e3e3e3;padding-bottom:12px}
+  .meta{color:#888;font-size:12px;margin-bottom:26px}
+  .msg{margin:0 0 18px;padding:12px 15px;border-radius:10px}
+  .msg.user{background:#eef3ff}
+  .msg.assistant{background:#f6f7f9}
+  .who{font-weight:600;font-size:12px;color:#666;margin-bottom:6px}
+  .text{white-space:pre-wrap;word-break:break-word}
+  @media print{body{margin:0;max-width:none}.msg{break-inside:avoid;page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<h1>${escapeHtml(title)}</h1>
+<div class="meta">导出时间：${date.toLocaleString()}　·　共 ${msgs.length} 条消息</div>
+${body}
+</body>
+</html>`
+}
 import SkillCards from './SkillCards'
 import KbPicker from './KbPicker'
 import ModelPicker from './ModelPicker'
@@ -145,6 +192,26 @@ export default function ChatWindow({
   // 右侧文档查看器：当前正在查看的引用文档（null 表示未打开）
   const [viewing, setViewing] = useState<{ id: number; filename: string } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  // 导出下拉菜单（Markdown / 纯文本 / JSON / 网页）
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
+
+  // 点空白处 / 按 Esc 关闭导出菜单
+  useEffect(() => {
+    if (!exportOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setExportOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [exportOpen])
   // 「贴底」标志：用户停在底部时为 true，自动跟随新内容；一旦向上翻看历史就置 false，
   // 这样 AI 流式生成时不会每次都强行把窗口拽回底部，用户可以自由查看聊天记录。
   const stickToBottom = useRef(true)
@@ -199,22 +266,59 @@ export default function ChatWindow({
     }
   }
 
-  const exportMarkdown = () => {
+  /** 导出当前对话到文件，支持 4 种格式：Markdown / 纯文本 / JSON / 网页(可打印成 PDF)。 */
+  const exportConversation = (format: ExportFormat) => {
     if (messages.length === 0) return
-    const md: string[] = [`# ${title || '对话记录'}`, '', `_导出时间：${new Date().toLocaleString()}_`, '']
-    for (const m of messages) {
-      md.push(m.role === 'user' ? '### 我' : '### AI')
-      md.push('')
-      md.push(m.content)
-      md.push('')
+    const name = (title || '对话记录').slice(0, 30)
+    const now = new Date()
+    let content = ''
+    let mime = 'text/plain;charset=utf-8'
+
+    if (format === 'md') {
+      const lines = [`# ${title || '对话记录'}`, '', `_导出时间：${now.toLocaleString()}_`, '']
+      for (const m of messages) {
+        lines.push(m.role === 'user' ? '### 我' : '### AI', '', m.content, '')
+      }
+      content = lines.join('\n')
+      mime = 'text/markdown;charset=utf-8'
+    } else if (format === 'txt') {
+      const lines = [title || '对话记录', `导出时间：${now.toLocaleString()}`, '='.repeat(44), '']
+      for (const m of messages) {
+        lines.push(`【${m.role === 'user' ? '我' : 'AI'}】`, m.content, '')
+      }
+      content = lines.join('\n')
+    } else if (format === 'json') {
+      content = JSON.stringify(
+        {
+          title: title || '对话记录',
+          exported_at: now.toISOString(),
+          message_count: messages.length,
+          messages: messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            created_at: m.created_at,
+            ...(m.ref_files?.length ? { ref_files: m.ref_files.map((f) => f.filename) } : {}),
+            ...(m.sources?.length ? { sources: m.sources } : {}),
+          })),
+        },
+        null,
+        2
+      )
+      mime = 'application/json;charset=utf-8'
+    } else {
+      // html：自带样式，浏览器里 Ctrl+P 即可「另存为 PDF」
+      content = buildConversationHtml(title || '对话记录', now, messages)
+      mime = 'text/html;charset=utf-8'
     }
-    const blob = new Blob([md.join('\n')], { type: 'text/markdown;charset=utf-8' })
+
+    const blob = new Blob([content], { type: mime })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${(title || '对话记录').slice(0, 30)}.md`
+    a.download = `${name}.${format}`
     a.click()
     URL.revokeObjectURL(url)
+    setExportOpen(false)
   }
 
   // 切换会话时加载历史。注意【不 abort 正在跑的流】：
@@ -577,15 +681,34 @@ export default function ChatWindow({
             onChange={onModelChange}
             onUnconfiguredHint={onUnconfiguredHint}
           />
-          <button
-            className="topbar-btn"
-            onClick={exportMarkdown}
-            disabled={messages.length === 0}
-            title="导出当前对话为 Markdown 文件"
-          >
-            <Download size={14} />
-            导出
-          </button>
+          <div className="export-wrap" ref={exportRef}>
+            <button
+              className="topbar-btn"
+              onClick={() => setExportOpen((v) => !v)}
+              disabled={messages.length === 0}
+              title="导出当前对话（支持多种格式）"
+            >
+              <Download size={14} />
+              导出
+              <ChevronDown size={12} />
+            </button>
+            {exportOpen && (
+              <div className="export-menu">
+                <button onClick={() => exportConversation('md')}>
+                  Markdown<span className="ex-ext">.md</span>
+                </button>
+                <button onClick={() => exportConversation('txt')}>
+                  纯文本<span className="ex-ext">.txt</span>
+                </button>
+                <button onClick={() => exportConversation('json')}>
+                  JSON<span className="ex-ext">.json</span>
+                </button>
+                <button onClick={() => exportConversation('html')}>
+                  网页 / PDF<span className="ex-ext">.html</span>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             className="panel-toggle"
             onClick={onTogglePanel}

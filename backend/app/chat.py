@@ -37,6 +37,26 @@ router = APIRouter(prefix="/api", tags=["chat"])
 _SRC_RE = re.compile(r"【(.+?)】")
 
 
+def _clear_session_memory(conv_id: int) -> None:
+    """丢弃某会话的 LangGraph 记忆（checkpointer 里的对话状态）。
+
+    为什么需要：模型调用若在网络异常 / 用户中断时半途终止（尤其是「工具调用」进行到一半），
+    checkpointer 会残留一条「AIMessage 带 tool_calls、却没有对应 ToolMessage」的半截历史。
+    此后该会话的每次请求都会在【历史校验阶段】报错：
+        ValueError: Found AIMessages with tool_calls that do not have a corresponding ToolMessage
+    关键：这个错误发生在「调用模型之前」，所以【换成本地模型也一样失败】——只能清掉该会话记忆。
+
+    清掉后的影响：前端消息记录（messages 表）不受影响，历史照样看得到；
+    只是 AI 的上下文记忆被重置（相当于这个会话「失忆」，但不影响继续使用）。
+    """
+    try:
+        from app.agent_manager import _CHECKPOINTER
+
+        _CHECKPOINTER.delete_thread(str(conv_id))
+    except Exception:
+        pass  # 清理失败不能影响主流程（此时响应已产出）
+
+
 def _extract_sources(text: str) -> list[str]:
     """从工具结果里抽出命中的来源文件名（去重，保持出现顺序）。"""
     out: list[str] = []
@@ -457,6 +477,9 @@ def chat_stream(
             partial = "".join(full)
             reply = partial if partial.strip() else "（回答生成已中断）"
             _save(reply)  # 行早已存在，此处写回部分/中断内容
+            # 中断可能发生在「工具调用进行到一半」，会留下半截历史让该会话后续报错，
+            # 这里清掉本会话记忆（前端消息记录不受影响，仍看得到历史）。
+            _clear_session_memory(conv.id)
             raise
         except Exception as e:
             # 云端报错（401/429/参数不合法/超时等）以前被静默吞成一行文字，用户看不到原因。
@@ -473,6 +496,10 @@ def chat_stream(
                     err_text = f"{err_text}｜{detail}"
             reply = f"出错了: {err_text}"
             _save(reply)
+            # 网络异常常发生在「工具调用进行到一半」，checkpointer 会残留半截历史，
+            # 导致该会话之后每次请求都报 INVALID_CHAT_HISTORY（换本地模型也一样，
+            # 因为错误在历史校验阶段、模型还没被调用）。清掉本会话记忆即可恢复。
+            _clear_session_memory(conv.id)
             # 额外推一个 error 事件，让前端拿到结构化原因而非只有文字
             yield f"data: {json.dumps({'error': err_text}, ensure_ascii=False)}\n\n"
         else:

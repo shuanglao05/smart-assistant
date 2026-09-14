@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { notificationApi } from '../api'
 import { Timer } from 'lucide-react'
 import PageShell from '../components/PageShell'
-import { CHIME_TONES, playChime, type ChimeTone } from '../chime'
+import { CHIME_TONES, previewChime, playChime, unlockAudio, type ChimeTone } from '../chime'
 
 type Tab = 'countdown' | 'stopwatch'
 
@@ -60,7 +60,7 @@ export default function TimerPage() {
   const changeTone = (t: ChimeTone) => {
     setTone(t)
     localStorage.setItem(TONE_KEY, t)
-    playChime(t, volRef.current) // 换音色即试听
+    previewChime(t, volRef.current) // 换音色即试听（内部会先解锁音频上下文）
   }
   const changeVolume = (v: number) => {
     setVolume(v)
@@ -87,9 +87,10 @@ export default function TimerPage() {
         notificationApi
           .create('⏰ 倒计时结束', `你设定的 ${fmt(total)} 倒计时已完成`, 'remind')
           .catch(() => {})
-        // 播放所选提示音（音色/音量实时读取，避免被闭包固化）
+        // 播放所选提示音（音色/音量实时读取，避免被闭包固化）。
+        // ⚠️ 这里【不要】用 alert：它是阻塞式弹窗，会卡住主线程，把铃声推迟到
+        //    用户点掉弹窗之后才响（甚至听不见）。视觉提示交给按钮变「已结束」+ 站内通知。
         playChime(toneRef.current, volRef.current)
-        alert('⏰ 倒计时结束！')
       } else {
         setLeft(remain)
       }
@@ -214,7 +215,16 @@ export default function TimerPage() {
           </div>
 
           <div className="timer-actions">
-            <button className="btn primary" onClick={() => setRunning((v) => !v)} disabled={left <= 0}>
+            <button
+              className="btn primary"
+              // 关键：在【用户点击】这一刻解锁音频（浏览器自动播放策略要求）。
+              // 否则倒计时结束时是定时器回调、并非用户手势，浏览器会拒绝发声。
+              onClick={() => {
+                unlockAudio()
+                setRunning((v) => !v)
+              }}
+              disabled={left <= 0}
+            >
               {running ? '暂停' : left <= 0 ? '已结束' : '开始'}
             </button>
             <button
@@ -255,7 +265,7 @@ export default function TimerPage() {
               />
               <em className="ts-val">{Math.round(volume * 100)}%</em>
             </label>
-            <button className="btn ts-test" onClick={() => playChime(tone, volume)}>
+            <button className="btn ts-test" onClick={() => previewChime(tone, volume)}>
               试听
             </button>
           </div>

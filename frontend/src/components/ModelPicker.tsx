@@ -86,14 +86,24 @@ export default function ModelPicker({
         key={key}
         className={`mp-item ${key === value ? 'on' : ''}`}
         onClick={() => pick(o)}
-        title={o.desc}
+        /* title 交由全局 Tooltip 组件渲染成浮层；把【完整模型名】放最前，方便看清被截断的名字 */
+        title={`${label}｜${o.desc}｜上下文窗口 ${o.context_window_text || '未知'}`}
       >
         {o.provider === 'cloud' ? (
           <Cloud size={14} className="mp-ico" />
         ) : (
           <Cpu size={14} className="mp-ico" />
         )}
-        <span className="mp-name">{label}</span>
+        {/* 名称过长时优雅截断（CSS ellipsis）；另加 title，悬停显示完整名称 */}
+        <span className="mp-name" title={label}>
+          {label}
+        </span>
+        {/* 上下文窗口标注：一眼看清这个模型"最多能记住多少 token" */}
+        {o.context_window_text && (
+          <span className="mp-ctx" title="上下文窗口（模型能记住的 token 上限）">
+            {o.context_window_text}
+          </span>
+        )}
         {o.provider === 'cloud' && !o.configured && <span className="mp-warn">未配置</span>}
         {key === value && <Check size={14} className="mp-check" />}
       </button>
@@ -106,10 +116,24 @@ export default function ModelPicker({
         className={`mp-trigger ${open ? 'on' : ''}`}
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
-        title="切换当前会话使用的模型"
+        title={
+          cur
+            ? `${cur.provider_id != null ? cur.label : cur.model}｜上下文窗口 ${
+                cur.context_window_text || '未知'
+              }`
+            : '选择当前会话使用的模型'
+        }
       >
         {cur?.provider === 'cloud' ? <Cloud size={14} /> : <Cpu size={14} />}
-        <span className="mp-cur">{cur ? (cur.provider_id != null ? cur.label : cur.model) : '选择模型'}</span>
+        {/* 当前模型名过长时截断，悬停显示完整名称 */}
+        <span className="mp-cur" title={cur ? (cur.provider_id != null ? cur.label : cur.model) : undefined}>
+          {cur ? (cur.provider_id != null ? cur.label : cur.model) : '选择模型'}
+        </span>
+        {cur?.context_window_text && (
+          <span className="mp-ctx" title="上下文窗口（模型能记住的 token 上限）">
+            {cur.context_window_text}
+          </span>
+        )}
         <ChevronDown size={14} className="mp-caret" />
       </button>
 

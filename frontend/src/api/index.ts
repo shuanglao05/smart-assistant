@@ -122,6 +122,19 @@ export const llmApi = {
     client.get<{ models: string[]; base_url: string; current: string }>('/llm-config/local-models'),
   deleteLocalModel: (name: string) =>
     client.delete('/llm-config/local-models', { data: { name } }),
+  // 上下文窗口（本地 Ollama 的 num_ctx）
+  getContextWindow: () =>
+    client.get<{
+      ollama_num_ctx: number
+      presets: number[]
+      min: number
+      max: number
+      note: string
+    }>('/llm-config/context-window'),
+  setContextWindow: (ollama_num_ctx: number) =>
+    client.post<{ ok: boolean; ollama_num_ctx: number }>('/llm-config/context-window', {
+      ollama_num_ctx,
+    }),
 }
 
 export const chatApi = {

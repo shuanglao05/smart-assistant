@@ -810,6 +810,52 @@ body {
   cursor: not-allowed;
 }
 
+/* 导出下拉菜单（顶栏「导出」按钮） */
+.export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.export-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 150px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow);
+}
+.export-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: calc(1rem * 12.5 / 14);
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.export-menu button:hover {
+  background: var(--panel-3);
+}
+.export-menu .ex-ext {
+  color: var(--ink-dim);
+  font-size: calc(1rem * 10.5 / 14);
+  font-family: var(--mono);
+}
+
 .theme-toggle {
   font-size: calc(1rem * 13 / 14);
   padding: 5px 9px;
@@ -2536,6 +2582,31 @@ html[data-fs='large'] {
 /* 数据存储位置提示（设置 → 账户） */
 .data-dir-msg {
   color: var(--brand);
+}
+
+/* 上下文窗口调节（设置 → API 管理 → 底部） */
+.ctx-window {
+  gap: 10px;
+}
+.ctx-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ctx-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ctx-input {
+  width: 110px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+}
+.settings-muted {
+  color: var(--ink-dim);
+  font-size: calc(1rem * 11.5 / 14);
 }
 
 .settings-section {
@@ -4555,6 +4626,17 @@ html[data-fs='large'] {
   font-size: calc(1rem * 10.5 / 14);
   color: var(--warn);
   flex-shrink: 0;
+}
+/* 上下文窗口标注：胶囊小标签，如「8K」「128K」 */
+.mp-ctx {
+  flex-shrink: 0;
+  font-size: calc(1rem * 10.5 / 14);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
 }
 .mp-check {
   color: var(--brand);

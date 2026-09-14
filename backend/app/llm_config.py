@@ -455,3 +455,59 @@ def delete_local_model(payload: LocalModelDelete, _current_user=Depends(get_curr
     except Exception as e:
         raise HTTPException(400, f"删除失败：{e}")
     return {"ok": True, "deleted": payload.name.strip()}
+
+
+# ------------------------------------------------ 上下文窗口（num_ctx）可调
+#
+# 【系统里「上下文窗口」到底指什么】—— 澄清一下，避免混淆（详见 build_llm）：
+#   · 本地 Ollama：ChatOllama(num_ctx=...) —— 这是我们唯一真正能控制的窗口，
+#     它决定「模型能看到多长的对话历史 + 提示词」，等价于本地模型的上下文长度。
+#   · 云端（百炼/智谱/DeepSeek…）：上下文长度由【平台 + 具体模型】决定，请求里
+#     没有对应参数可调（我们的代码也没传）。云端唯一能调的是「输出上限」max_tokens，
+#     目前未开放；历史消息的长度控制（截断/摘要）本项目尚未实现。
+# 因此这里的「上下文窗口」= 本地 Ollama 的 num_ctx，只对本地模型生效。
+CONTEXT_WINDOW_PRESETS = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
+CONTEXT_WINDOW_MIN = 512
+CONTEXT_WINDOW_MAX = 131072
+
+
+@router.get("/context-window")
+def get_context_window(_current_user=Depends(get_current_user)):
+    """读取「上下文窗口」当前值（本地 Ollama 的 num_ctx）+ 允许范围 + 预设。"""
+    return {
+        "ollama_num_ctx": config.OLLAMA_NUM_CTX,
+        "presets": CONTEXT_WINDOW_PRESETS,
+        "min": CONTEXT_WINDOW_MIN,
+        "max": CONTEXT_WINDOW_MAX,
+        "note": "仅对【本地 Ollama】生效（num_ctx）。云端模型的上下文长度由平台决定，不可调。",
+    }
+
+
+class ContextWindowUpdate(BaseModel):
+    ollama_num_ctx: int
+
+
+@router.post("/context-window")
+def set_context_window(
+    payload: ContextWindowUpdate, _current_user=Depends(get_current_user)
+):
+    """修改本地 Ollama 的上下文窗口（num_ctx），写入内存与 .env，并重建 Agent 缓存。
+
+    注意：num_ctx 在【构建 Agent 时】读取（build_llm），所以改完必须清掉 Agent 缓存，
+    否则旧会话仍在用旧的 num_ctx。清缓存后，下一条消息就用新值（无需重启）。
+    """
+    n = int(payload.ollama_num_ctx)
+    if n < CONTEXT_WINDOW_MIN or n > CONTEXT_WINDOW_MAX:
+        raise HTTPException(
+            400, f"上下文窗口需在 {CONTEXT_WINDOW_MIN} ~ {CONTEXT_WINDOW_MAX} 之间"
+        )
+    config.OLLAMA_NUM_CTX = n
+    _update_env_file({"OLLAMA_NUM_CTX": str(n)})
+    # 清 Agent 缓存，让新配置在【下一条消息】即生效
+    try:
+        from app.agent_manager import agent_cache
+
+        agent_cache.clear()
+    except Exception:
+        pass
+    return {"ok": True, "ollama_num_ctx": n}

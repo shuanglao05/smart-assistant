@@ -55,6 +55,9 @@ export default function FunctionPanel() {
 
   const [order, setOrder] = useState<string[]>(() => loadOrder())
   const [overIdx, setOverIdx] = useState<number | null>(null)
+  // 正在拖拽的项下标。必须用 state（不能用 ref）：className 依赖它来控制 .dragging（opacity:0.4），
+  // 而 ref 变化【不会触发重渲染】——拖拽结束后灰态会卡在源项上清不掉（这就是"功能名一直变灰"的根因）。
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null)
   const dragIndex = useRef<number | null>(null)
   // 记录本次按下是否落在拖拽手柄上：只有手柄才允许拖动，避免整块可拖导致"点击被当成拖拽吞掉"
   const dragFromHandle = useRef(false)
@@ -64,6 +67,7 @@ export default function FunctionPanel() {
   const onDrop = (targetIdx: number) => {
     const from = dragIndex.current
     setOverIdx(null)
+    setDraggingIdx(null)
     dragIndex.current = null
     if (from == null || from === targetIdx) return
     const next = [...order]
@@ -101,8 +105,8 @@ export default function FunctionPanel() {
             <button
               key={p}
               className={`func-item ${pathname === p ? 'active' : ''} ${
-                dragIndex.current === idx ? 'dragging' : ''
-              } ${overIdx === idx && dragIndex.current !== idx ? 'drag-over' : ''}`}
+                draggingIdx === idx ? 'dragging' : ''
+              } ${overIdx === idx && draggingIdx !== idx ? 'drag-over' : ''}`}
               draggable
               onMouseDown={(e) => {
                 // 只有按在左侧手柄上才允许拖动；按在别处时点击照常生效
@@ -114,6 +118,7 @@ export default function FunctionPanel() {
                   return
                 }
                 dragIndex.current = idx
+                setDraggingIdx(idx)
                 e.dataTransfer.effectAllowed = 'move'
               }}
               onDragOver={(e) => {
@@ -126,8 +131,10 @@ export default function FunctionPanel() {
                 onDrop(idx)
               }}
               onDragEnd={() => {
-                // 拖拽结束（无论成功/取消/Esc）都必须清状态，否则源项会卡在 .dragging（opacity:0.4）变灰
+                // 拖拽结束（无论成功/取消/Esc）都必须清状态，否则源项会卡在 .dragging（opacity:0.4）变灰。
+                // 关键：要用 state 清（setDraggingIdx），只清 ref 不会触发重渲染、灰态仍留在界面上。
                 dragIndex.current = null
+                setDraggingIdx(null)
                 setOverIdx(null)
               }}
               onClick={() => navigate(p)}
