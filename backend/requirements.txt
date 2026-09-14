@@ -27,5 +27,12 @@ langchain-ollama>=0.3     # 本地 Ollama（走原生 /api/chat，才能关闭 q
 langgraph>=0.2
 langgraph-checkpoint-sqlite>=2.0  # 会话记忆持久化（SqliteSaver）：重启后端不丢 AI 上下文
 
+# ⚠️ 装完依赖后若后端启动报「应用程序控制策略已阻止此文件」(_uuid_utils)：
+#    这是 Windows 智能应用控制(SAC)拦截了 uuid-utils 的未签名 Rust 原生扩展，
+#    langchain-core / langsmith 硬依赖它且无回退，会导致后端 import 阶段直接崩溃。
+#    修复（把原生扩展换成功能等价的纯 Python 实现）：
+#        cd backend && venv\Scripts\python fix_sac_uuid_utils.py
+#    详见 docs/安装指南_环境准备.md 第 8.1 节。
+
 # ---- 测试 ----
 pytest>=8.0
