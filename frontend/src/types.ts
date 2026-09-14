@@ -1,3 +1,27 @@
+/**
+ * types.ts —— 前端共享类型定义（与后端 Pydantic Schema 一一对应）
+ *
+ * 职责：
+ *   集中声明前后端数据契约的 TypeScript 类型，供页面/组件与 api 层共同引用，
+ *   避免每个组件各写一遍「长得差不多」的接口定义，也便于一处修改全局生效。
+ *
+ * 维护约定（重要）：
+ *   - 本文件必须与后端 backend/app/schemas.py、models.py 的字段保持同步；
+ *     后端加字段时这里要一起加（可选字段用 `?`），否则 tsc 检查不出真实字段的缺失。
+ *   - 字段名与后端返回的 JSON key **严格一致**，不做驼峰转换——保持所见即所得，
+ *     排查接口问题时不必在脑中做命名映射。
+ *   - 标记为可选的字段（`?`）通常是因为后端该列允许 NULL，或按场景不下发。
+ *
+ * 分组概览：
+ *   会话消息  Session / Message
+ *   模型与API LlmProvider / LlmOption / LlmConfigPayload / ApiKeyInfo
+ *   知识库    KbDocument / KbCollection / KbChunkPreview / KbGraphDoc / KbGraph
+ *   文件      FileDetail / FileInfo
+ *   功能模块  Todo / Note / Schedule / Course / ParsedCourse /
+ *             Skill / SkillCreate / SkillUpdate / NotificationItem / SearchHit
+ *   用户      AuthResult / UserProfile / UserUpdatePayload
+ */
+
 export interface Session {
   id: number
   title: string

@@ -1,3 +1,44 @@
+/**
+ * SettingsModal.tsx —— 设置面板（三个标签页，约 1200 行）
+ *
+ * 职责：
+ *   以弹窗承载全部应用级设置，按 Tab 分为三页：
+ *     【外观 appearance】主题（浅色 / 深色 / 护眼 / 高对比）、强调色、
+ *                        字号档位、昵称与头像、修改密码
+ *     【API 管理 api】    云端多 API 接入（新增 / 编辑 / 删除 provider、拉取模型清单、
+ *                        连通性检测、代理地址、深度思考开关与预算）、
+ *                        本地 Ollama 模型列表与删除、上下文窗口（num_ctx）
+ *     【账户 account】    数据存储位置等
+ *
+ * Props：
+ *   open            —— 是否显示（由父级控制）
+ *   onClose         —— 请求关闭
+ *   profile         —— 当前用户资料，充当各表单的初值
+ *   onProfileUpdate —— 资料保存成功后回传父级
+ *   onConnectCloud  —— 提交云端配置（父级负责落库并重建会话 Agent）
+ *   onLogout        —— 退出登录
+ *
+ * 状态分组：
+ *   外观    tab、强调色（配合 theme.ts 的 ACCENTS / FONT_SIZES / THEMES）
+ *   账户    nickname / avatar / pwdCurrent / pwdNew
+ *   API     navSel（左栏选中：'cloud' | 'local' | provider.id）、providers（已接入列表）、
+ *           providerName / keyInput / baseUrl / model / modelsText（右栏表单）、
+ *           checkResult（连通性检测结果）、deepThinking / thinkBudget /
+ *           thinkSupported / thinkHint、bypassProxy（是否强制直连）
+ *   上下文  ctxNum / ctxPresets / ctxRange / ctxNote（取值与范围由后端下发）
+ *
+ * 关键函数：
+ *   changeTheme / changeFontSize —— **先本地生效再持久化**：立刻调用 theme.ts 的
+ *       applyTheme/applyFontSize 改 <html> 属性（用户即时看到效果），再 POST 用户资料。
+ *   changeAccent —— ⚠️ 例外：强调色**只存 localStorage，不走后端**（纯前端偏好）。
+ *   runCheck / fetchCloudModels —— 测连通性、拉取该 provider 的模型清单。
+ *   detectProxy —— 自动探测本机可用代理（对应后端的代理自愈逻辑）。
+ *   saveContextWindow —— 保存本地 Ollama 的 num_ctx；改完后端会清 Agent 缓存才生效。
+ *   saveDataDir —— 修改数据存储位置，**需要重启后端**才能生效。
+ *
+ * ⚠️ 本文件是全项目最长的组件，状态虽多但已按 Tab 分组；
+ *    新增设置项请归入对应 Tab 分组，并在后端补上配套的读写接口。
+ */
 import { useEffect, useRef, useState } from 'react'
 import { Check, Cloud, Cpu, Eye, EyeOff, Loader2, Plus, RefreshCw, Search, Trash2, X, Zap } from 'lucide-react'
 import { apiKeysApi, llmApi, llmProvidersApi, systemApi, usersApi } from '../api'

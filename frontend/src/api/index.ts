@@ -1,3 +1,30 @@
+/**
+ * api/index.ts —— 后端接口的统一封装层
+ *
+ * 职责：
+ *   按业务模块把 REST 接口封装成带方法名的对象（authApi / sessionApi / chatApi ...），
+ *   组件只调 `sessionApi.list()` 这类语义化方法，不直接拼 URL 字符串——
+ *   后端改路径时只改这里一处，不必全局搜索替换。
+ *
+ * 依赖：
+ *   ./client —— axios 实例，统一配置 baseURL、JWT 请求头与错误拦截。
+ *
+ * 约定：
+ *   - 每个方法返回 axios 的 Promise，调用方用 `const { data } = await ...` 取业务数据；
+ *   - 需要请求体的统一走 `{ data: {...} }` 这种 axios 配置写法（与 client 的拦截器约定一致）；
+ *   - 所有类型来自 ../types，保证与后端契约同源。
+ *
+ * 模块索引：
+ *   authApi 登录注册            | sessionApi 会话与消息
+ *   chatApi 对话（**非流式**）   | llmApi / llmProvidersApi 模型与多 API 接入
+ *   filesApi / kbApi 文件与知识库 | searchApi 全文检索
+ *   todoApi / notesApi / schedulesApi / coursesApi / skillsApi 各功能模块
+ *   weatherApi / calendarApi（节假日） | notificationApi 站内通知
+ *   usersApi 个人资料 | apiKeysApi 密钥 | systemApi 版本与健康检查
+ *
+ * ⚠️ 流式对话不在这里：SSE 需要 fetch 逐块读取响应体，axios 不适合，
+ *    因此 ChatWindow 直接用 fetch POST /api/chat/stream，见该组件内实现。
+ */
 import client from './client'
 import type {
   ApiKeyInfo,

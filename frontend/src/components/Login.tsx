@@ -1,3 +1,27 @@
+/**
+ * Login.tsx —— 登录 / 注册页（未登录时的唯一入口）
+ *
+ * 职责：
+ *   用同一套表单承载「登录」与「注册」两种模式，靠 mode 状态切换文案与所调接口；
+ *   成功后把 JWT 与用户名写入 localStorage，再回调 onLogin() 让上层切到主界面。
+ *
+ * Props：
+ *   onLogin —— 登录/注册成功后的回调，由 App 传入（收到即切换到已登录布局）。
+ *
+ * State：
+ *   mode                —— 'login' | 'register'，决定文案与接口
+ *   username / password —— 受控输入
+ *   error               —— 后端返回的错误信息（如「用户名或密码错误」）
+ *   loading             —— 请求进行中标记，防止重复提交
+ *
+ * 依赖：
+ *   authApi.login / authApi.register（见 api/index.ts），两者都返回 { token, username }。
+ *
+ * 注意：
+ *   - 提交按钮在用户名/密码为空或请求进行中时禁用；
+ *   - 错误文案优先取后端 detail（FastAPI HTTPException 的详情），取不到才用兜底提示，
+ *     这样后端改提示语前端不用跟着改。
+ */
 import { useState } from 'react'
 import { authApi } from '../api'
 

@@ -1,3 +1,46 @@
+/**
+ * ChatWindow.tsx —— 对话主窗口（本应用最核心的前端组件）
+ *
+ * 职责：
+ *   承载一个会话的完整交互：消息列表渲染、输入区（附件 / 技能入口）、
+ *   顶栏（模型切换、导出、右侧面板开关），以及 **SSE 流式对话的发起与中断**。
+ *
+ * Props（由 MainLayout 下发）：
+ *   【会话与模型】
+ *     sessionId            —— 当前会话 id，流式请求与历史拉取都用它
+ *     title                —— 会话标题（顶栏展示）
+ *     provider / model / providerId —— 当前模型；providerId 指向多 API provider
+ *     options              —— 可选模型清单（来自 GET /api/llm-options）
+ *     onModelChange        —— 切换模型后回调父级更新会话
+ *     onUnconfiguredHint   —— 点到「未配置」的云端模型时，提示并打开设置
+ *   【布局】
+ *     panelOpen / onTogglePanel —— 右侧功能面板的开合
+ *     onTitleChange        —— 首条消息后标题变化，通知父级刷新左侧会话列表
+ *   【与外部联动】
+ *     incomingText / onIncomingConsumed —— 外部（技能卡片、示例问题）把文字送进输入框
+ *     onTodoChanged        —— AI 经工具改了待办后，通知待办页刷新
+ *     activeSkillIds / onSkillsChanged  —— 本会话启用的技能
+ *     activeKbIds / onKbChanged         —— 本会话启用（参与检索）的知识库
+ *
+ * State：
+ *   messages         —— 当前会话的消息列表
+ *   input / inputH   —— 输入框内容；inputH 是手动拖动后的高度（null = 自动增高）
+ *   streamingSids    —— 正在流式输出的会话 id 集合（切换会话时后台仍可继续生成）
+ *   attaches / attaching / limits —— 待发送附件、上传中标记、上传限制说明
+ *   viewing          —— 右侧文档查看器当前打开的文件
+ *   exportOpen       —— 导出下拉菜单开合
+ *
+ * 关键函数：
+ *   runStream()          —— **SSE 流式对话核心**：用 fetch（非 axios）逐块读取
+ *                           `data: {...}` 事件，按字段分派 token / reasoning /
+ *                           sources / error / done 五类处理。
+ *   exportConversation() —— 按 format 导出 Markdown / 纯文本 / JSON / 网页。
+ *   send / stop / regenerate / deleteMessage —— 发送、停止、重新生成、删除单条。
+ *
+ * ⚠️ 为什么流式必须用 fetch：SSE 要读取响应体的分块流，axios 不支持流式响应体。
+ * ⚠️ messages 与 streamsRef 是两份状态，streamingSids 只是派生视图（用于渲染），
+ *    改动时注意三者保持同步，不要把 streamingSids 当成独立真相源。
+ */
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import {
   ArrowUp,
