@@ -5,7 +5,7 @@
  *   把原本在聊天右侧面板里的「技能」搬成独立页面：用 PageShell 提供统一页头
  *   （图标 + 标题）与卡片容器，内部直接复用 SkillsPanel，避免逻辑重复。
  *
- * Props：
+ * 组件属性（props）：
  *   sessionId       —— 当前会话 id；为空/undefined 表示尚未选中会话
  *   activeSkillIds  —— 该会话已启用的技能 id 列表
  *   onUseSkill      —— 点击技能卡片时，把它的提示词填进对话输入框

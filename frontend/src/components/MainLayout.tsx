@@ -1,3 +1,28 @@
+/**
+ * MainLayout.tsx —— 主界面布局（三栏骨架 + 当前会话状态中枢）
+ *
+ * 职责：
+ *   已登录后的整体骨架：左侧会话栏、中间对话区或功能页、右侧功能面板。
+ *   它同时是「当前会话」这一核心状态的持有者，向下分发给各子组件。
+ *
+ * 组件属性（props）：
+ *   profile         —— 当前用户资料（透传给设置面板）
+ *   onProfileUpdate —— 资料更新后回传 App
+ *   onLogout        —— 退出登录
+ *
+ * 组件状态：
+ *   sessions / currentId —— 会话列表与当前选中会话
+ *   options              —— 可选模型清单（供模型选择器）
+ *   todoKey              —— 待办刷新信号：AI 通过工具改过待办后 +1，通知待办页重拉
+ *   sidebarOpen          —— 左栏开合（持久化到 localStorage）
+ *
+ * 关键函数：
+ *   handleDelete / handleClearAll —— 删除单个 / 清空全部会话
+ *   handleModelChange            —— 切换当前会话使用的模型
+ *   handleRename                 —— 重命名会话
+ *   handleUseSkill               —— 把技能提示词送进对话输入框
+ *   startResize                  —— 三栏列宽拖拽
+ */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { llmApi, sessionApi } from '../api'

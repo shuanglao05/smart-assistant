@@ -1,3 +1,23 @@
+/**
+ * SessionList.tsx —— 左侧会话列表（含会话内搜索）
+ *
+ * 职责：
+ *   展示全部会话并高亮当前会话，提供新建 / 选择 / 重命名 / 删除 / 清空，
+ *   以及跨会话的内容搜索（搜到结果可直接跳到对应会话）。
+ *
+ * 组件属性（props）：
+ *   sessions / currentId          —— 会话数据与当前选中项
+ *   sidebarOpen / onToggleSidebar —— 侧栏开合
+ *   onSelect / onCreate / onDelete / onRename / onClearAll —— 各类操作回调
+ *
+ * 组件状态：
+ *   editingId / draft —— 正在就地重命名的会话 id 与其草稿标题
+ *   q / results       —— 搜索关键词与命中结果
+ *
+ * 说明：
+ *   组件本身不持有会话数据，全部由父级 MainLayout 传入，属「受控展示 + 回调」模式；
+ *   这样删除/重命名后的刷新逻辑只需在父级实现一处。
+ */
 import { useEffect, useRef, useState } from 'react'
 import { ChevronsLeft, ChevronsRight, MessageSquare, Pencil, Plus, Search, Settings, Trash2, X } from 'lucide-react'
 import { searchApi } from '../api'

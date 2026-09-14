@@ -10,7 +10,7 @@
  *                        本地 Ollama 模型列表与删除、上下文窗口（num_ctx）
  *     【账户 account】    数据存储位置等
  *
- * Props：
+ * 组件属性（props）：
  *   open            —— 是否显示（由父级控制）
  *   onClose         —— 请求关闭
  *   profile         —— 当前用户资料，充当各表单的初值

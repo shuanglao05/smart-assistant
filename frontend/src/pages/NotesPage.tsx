@@ -1,3 +1,24 @@
+/**
+ * NotesPage.tsx —— 智能笔记（按天归档 + Markdown 编辑 / 预览）
+ *
+ * 职责：
+ *   记事本式界面：左栏笔记列表（按日期分组、支持搜索），右栏编辑正文；
+ *   支持编辑 / 预览切换，并可将全部笔记导出。
+ *
+ * 组件状态：
+ *   notes / activeId       —— 笔记列表与当前打开项
+ *   title / content / day  —— 当前笔记的标题、正文、所属日期
+ *   mode                   —— 'edit' 编辑 | 'preview' 预览（预览走 Markdown 渲染）
+ *   q / saving             —— 搜索关键词与保存中标记
+ *
+ * 关键函数：
+ *   load / openNote / newNote / save / remove —— 笔记基本操作
+ *   exportAll / buildHtmlDoc / base()         —— 导出：拼装 HTML 文档并下载
+ *
+ * 说明：
+ *   正文支持 Markdown，预览复用统一的 Markdown 组件；
+ *   day 字段形如 "2026-09-14"，既用于列表分组，也用于让 AI 归纳某天的记录。
+ */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Download,

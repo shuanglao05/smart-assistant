@@ -1,3 +1,25 @@
+/**
+ * CalendarPage.tsx —— 日历（月视图 + 节假日角标 + 每日备忘）
+ *
+ * 职责：
+ *   渲染月历，标注放假日与调休补班日，支持选中某天写备忘、调整日历格子大小。
+ *
+ * 组件状态：
+ *   year / month / selected —— 当前年月与选中日期
+ *   memos / draft           —— 各日备忘（持久化）与当前编辑中的草稿
+ *   cell                    —— 日历格子尺寸档位（持久化）
+ *   （另有当年放假安排，来自后端接口，数据源为 timor.tech 的国务院放假安排）
+ *
+ * 关键函数：
+ *   moveMonth / pickDate / goToday —— 翻月、选日、回到今天
+ *   saveDraft / hasMemo            —— 保存备忘、判断某天是否有备忘
+ *   changeCell                     —— 调整格子大小
+ *
+ * ⚠️ 节日标注的一个坑：
+ *   后端接口在整段假期内【每天返回同一个节日名】（10-02 也返回"国庆节"），
+ *   所以节日名必须由前端固定的节日表（本文件内的公历 / 农历表）决定，
+ *   接口返回的 name 只用来说明"这段假期归属于哪个节日"。
+ */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { CalendarDays } from 'lucide-react'
 import PageShell from '../components/PageShell'

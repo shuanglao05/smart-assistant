@@ -1,3 +1,20 @@
+/**
+ * KbGraph.tsx —— 知识库关系图
+ *
+ * 职责：
+ *   把一个知识库内的文档与片段可视化：点击节点可查看片段预览，
+ *   用于直观判断「某个文件被切成了哪些片段、切分是否合理」。
+ *
+ * 组件属性（props）：
+ *   collectionId —— 要展示的知识库 id；为 null 时不渲染（表示尚未选中知识库）
+ *
+ * 组件状态：
+ *   data / loading —— 图谱数据与加载中标记
+ *   sel            —— 当前选中节点（所属文档 / 片段序号 / 片段预览）
+ *
+ * 依赖：
+ *   kbApi 的图谱接口；后端按 user_id + collection_id 过滤后返回，前端不做权限判断。
+ */
 import { useEffect, useMemo, useState } from 'react'
 import { Network } from 'lucide-react'
 import { kbApi } from '../api'

@@ -1,3 +1,26 @@
+/**
+ * TimetablePage.tsx —— 课表（周视图 + 周次切换）
+ *
+ * 职责：
+ *   以「节次 × 星期」的表格渲染课程，支持切换周次、显示全部周、调整行高档位，
+ *   并接入课表导入与手动增删课程。
+ *
+ * 组件状态：
+ *   courses            —— 课程列表
+ *   semStart / week    —— 学期开始日期与当前周次（开学日持久化在本机）
+ *   showAll            —— 是否显示全部周（忽略周次过滤）
+ *   importing / adding —— 导入弹窗与新增表单的开合
+ *   rowH               —— 表格行高（持久化），列宽按比例联动
+ *
+ * 关键函数：
+ *   saveSemStart —— 设置开学日期，用于把「第 N 周」换算成具体日期
+ *   add / remove —— 手动增删课程
+ *   changeRowH   —— 调整行高
+ *
+ * 说明：
+ *   课程颜色由后端存十六进制值；渲染时按颜色亮度自动决定用深色还是浅色文字，
+ *   保证浅色课程块上的文字同样可读。
+ */
 import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { CalendarDays, ChevronLeft, ChevronRight, Plus, Wand2 } from 'lucide-react'
 import PageShell from '../components/PageShell'

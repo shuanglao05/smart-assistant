@@ -1,3 +1,25 @@
+/**
+ * ModelPicker.tsx —— 自绘模型选择器（下拉菜单）
+ *
+ * 职责：
+ *   以下拉菜单展示全部可选模型（本机 Ollama + 各已接入的云端 provider），
+ *   点击即切换当前会话使用的模型。
+ *
+ * 组件属性（props）：
+ *   options            —— 可选模型清单（来自 GET /api/llm-options）
+ *   value              —— 当前值，形如 "provider|model" 或 "provider|model|provider_id"
+ *   disabled           —— 禁用（如正在流式生成时）
+ *   onChange           —— 选择后回调，带回 provider / model / provider_id
+ *   onUnconfiguredHint —— 点到「未配置」的云端模型时提示并打开设置
+ *
+ * 组件状态：
+ *   open —— 下拉是否展开（点击外部或按 Esc 自动关闭）
+ *
+ * 说明：
+ *   keyOf() 把模型选项编码成统一字符串键，同时也是 value 的格式来源，
+ *   保证「当前值」与「列表项」的比较口径一致。
+ *   模型名过长时用省略号截断，并补 title 由全局 Tooltip 显示完整名称。
+ */
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Cloud, Cpu } from 'lucide-react'
 import type { LlmOption } from '../types'

@@ -1,3 +1,19 @@
+/**
+ * App.tsx —— 应用根组件（登录态判定 + 顶层切换）
+ *
+ * 职责：
+ *   按是否已登录切换两套界面，本身不含业务逻辑：
+ *     · 未登录 → <Login />（登录 / 注册）
+ *     · 已登录 → <MainLayout />（主界面：会话栏 + 对话区 + 功能页）
+ *
+ * 组件状态：
+ *   isAuthed —— 是否已登录。初值直接读 localStorage 的 token，
+ *               因此刷新页面不会掉登录态（token 失效由 api/client.ts 的 401 拦截兜底）。
+ *   profile  —— 当前用户资料，是主题 / 字号 / 昵称 / 头像的数据源。
+ *
+ * 副作用：
+ *   登录后拉取个人资料并与本地外观设置同步，保证换设备或清缓存后外观仍一致。
+ */
 import { useEffect, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import Login from './components/Login'

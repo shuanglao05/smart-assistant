@@ -1,3 +1,20 @@
+/**
+ * Weather.tsx —— 天气查询组件（实况 / 预报切换）
+ *
+ * 职责：
+ *   输入城市名后查询实况天气或未来几天预报并展示。
+ *   数据来自高德地图接口（经后端 /api/weather 代理），【完全不经过大模型】。
+ *
+ * 组件状态：
+ *   city     —— 输入的城市名
+ *   mode     —— 'now' 实况 / 其它为预报模式
+ *   result / err / loading —— 结果文本、是否出错、加载中
+ *   querying —— 正在查询的模式，用于只给对应按钮显示 loading
+ *
+ * 性能细节：
+ *   每个 mode 各留一份最近结果缓存（放在 ref 中），切换 tab 时秒开、不必重复请求。
+ *   缓存只影响展示，不改变查询语义；需要最新数据时重新查询即可覆盖。
+ */
 import { useRef, useState } from 'react'
 import { Search } from 'lucide-react'
 import { weatherApi } from '../api'

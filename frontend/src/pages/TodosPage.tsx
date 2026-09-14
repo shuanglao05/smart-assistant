@@ -4,7 +4,7 @@
  * 职责：
  *   用 PageShell 包一层页头，内部复用 TodoTool 展示与增删待办。
  *
- * Props：
+ * 组件属性（props）：
  *   refreshKey —— 由上层递增的刷新信号；该值变化时 TodoTool 会重新拉取列表。
  *                 用途：AI 通过 add_todo 工具新增待办后，界面能同步显示出来。
  *

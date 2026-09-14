@@ -1,3 +1,23 @@
+/**
+ * Tooltip.tsx —— 全局悬浮提示（把原生 title 换成自绘浮层）
+ *
+ * 职责：
+ *   在文档级别监听鼠标移入 / 移出：凡带 title 属性的元素，悬停时用自绘浮层显示其文本，
+ *   同时【把原生 title 临时摘掉】，避免浏览器再弹一个系统提示、两个框重叠。
+ *
+ * 挂载位置：
+ *   main.tsx（在路由之外，全局唯一一个）。因此任何组件只要补上 title 属性，
+ *   就自动获得统一样式的提示，不必各自引入组件——这也是补 title 就能修好
+ *   「模型名过长看不全」的原因。
+ *
+ * 组件状态 / 引用：
+ *   tip   —— 当前要显示的提示（文本 + 坐标）
+ *   cur   —— 当前悬停元素（移出时用于还原它的 title）
+ *   saved —— 被临时摘掉的原始 title 文本
+ *
+ * 细节：
+ *   滚动或窗口失焦时立即隐藏，避免浮层与元素脱节。
+ */
 import { useEffect, useRef, useState } from 'react'
 
 type Tip = { text: string; x: number; y: number; below: boolean }

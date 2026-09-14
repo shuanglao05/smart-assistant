@@ -1,3 +1,24 @@
+/**
+ * SkillsPanel.tsx —— 技能面板（技能增删改查 + 按会话启用）
+ *
+ * 职责：
+ *   以卡片形式列出技能，支持新建 / 编辑 / 删除，以及「是否在本会话启用」的勾选。
+ *   同一套面板被右侧功能面板与独立的技能页共同复用，避免逻辑重复。
+ *
+ * 组件属性（props）：
+ *   sessionId       —— 当前会话 id；未选中会话时无法勾选启用
+ *   activeSkillIds  —— 本会话已启用的技能 id 列表
+ *   onUseSkill      —— 点击卡片时把技能提示词填进对话输入框
+ *   onSessionUpdate —— 启用状态变更后通知上层刷新
+ *
+ * 组件状态：
+ *   skills / loading            —— 技能列表与加载中标记
+ *   editing / showForm / form   —— 表单开合与正在编辑的技能
+ *
+ * 依赖：
+ *   skillsApi —— 列表 / 新建 / 更新 / 删除 / 切换本会话启用。
+ *   技能的启用状态存在 conversations.active_skill_ids，因此是「按会话」而非全局。
+ */
 import { useEffect, useRef, useState } from 'react'
 import { FileText, FolderOpen, Pencil, Plus, Upload, X } from 'lucide-react'
 import { skillsApi, sessionApi } from '../api'

@@ -1,3 +1,28 @@
+/**
+ * KnowledgePage.tsx —— 知识库管理页（本应用第二复杂的页面）
+ *
+ * 职责：
+ *   管理「知识库（集合）→ 文档 → 片段」三层结构：
+ *     · 左栏：知识库列表（新建 / 重命名 / 删除 / 切换）与各库的检索 Top-K 设置
+ *     · 右栏：当前库的文档列表，支持上传、删除、重建索引
+ *     · 视图：列表 / 关系图 两种模式切换
+ *
+ * 组件状态：
+ *   cols / current —— 知识库列表与当前选中库
+ *   docs / busy    —— 当前库的文档与忙碌标记
+ *   view           —— 'list' 列表 | 'graph' 关系图
+ *   limits         —— 上传限制与 RAG 参数。**从后端接口读取后展示**，
+ *                     不在前端硬编码，避免前后端数值不一致造成误导
+ *
+ * 关键函数：
+ *   changeTopK / changeColTopK         —— 设置全局默认 / 单库的检索片段数
+ *   createCol / renameCol / removeCol  —— 知识库增删改
+ *   loadDocs / selectCol               —— 文档加载与库切换
+ *
+ * 说明：
+ *   数据靠 user_id + collection_id 双重过滤隔离；前端只负责维护「当前库」这个选中态，
+ *   索引的切分与向量化全部由后端完成（上传后自动触发）。
+ */
 import { useEffect, useRef, useState } from 'react'
 import {
   BookOpen,

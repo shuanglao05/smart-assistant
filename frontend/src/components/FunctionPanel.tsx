@@ -1,3 +1,20 @@
+/**
+ * FunctionPanel.tsx —— 右侧功能入口面板（支持拖拽排序）
+ *
+ * 职责：
+ *   展示天气 / 技能 / 待办 / 计时器 / 日历 / 课表 / 笔记 / 知识库等功能入口，
+ *   点击跳转到对应独立页面；入口顺序可拖拽调整，并记忆到 localStorage。
+ *
+ * 组件状态：
+ *   order       —— 当前入口顺序（持久化，刷新后保持用户习惯）
+ *   overIdx     —— 拖拽悬停到的目标下标（用于显示插入位置提示）
+ *   draggingIdx —— 正在被拖拽的项下标
+ *
+ * ⚠️ 一个必须注意的实现细节：
+ *   draggingIdx 必须用 state 而非 ref。它参与 className 计算（控制 .dragging 的透明度），
+ *   而 ref 变化【不会触发重渲染】—— 早期用 ref 导致拖拽结束后灰态清不掉，
+ *   表现为"功能名一直变灰"，只能刷新页面才恢复。
+ */
 import type { ReactNode } from 'react'
 import { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'

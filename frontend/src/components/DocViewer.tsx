@@ -1,3 +1,21 @@
+/**
+ * DocViewer.tsx —— 右侧文档查看器
+ *
+ * 职责：
+ *   点击对话中引用的文档名后，从右侧滑出面板展示该文档的抽取正文，并提供下载。
+ *
+ * 组件属性（props）：
+ *   fileId   —— 要查看的文件 id（详情由接口拉取）
+ *   filename —— 文件名（用于面板标题）
+ *   onClose  —— 关闭面板
+ *
+ * 组件状态：
+ *   detail / loading / error —— 文档详情、加载中标记、错误信息
+ *
+ * 说明：
+ *   展示的是上传时抽取并存进 files.content 的正文，而非原始文件的渲染，
+ *   因此 PDF / Word 看到的是纯文本（原文排版不在本组件还原范围内）。
+ */
 import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Download, FileText, X } from 'lucide-react'

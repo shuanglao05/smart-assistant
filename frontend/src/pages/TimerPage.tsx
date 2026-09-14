@@ -1,3 +1,25 @@
+/**
+ * TimerPage.tsx —— 计时器（倒计时 / 秒表 + 提示音设置）
+ *
+ * 职责：
+ *   提供倒计时与秒表两个标签页，并支持选择提示音音色与音量、试听。
+ *
+ * 组件状态：
+ *   tab                     —— 'countdown' 倒计时 | 秒表
+ *   total / left / running  —— 倒计时总时长、剩余秒数、是否在跑
+ *   inputH / inputM / inputS —— 自定义时长的时 / 分 / 秒三个输入格
+ *
+ * 关键函数：
+ *   applyPreset / applyInput  —— 用预设或手输值设定时长
+ *   changeTone / changeVolume —— 提示音设置（持久化）
+ *   swReset                   —— 秒表复位
+ *
+ * ⚠️ 能出声的关键（踩过的坑，改动前必读）：
+ *   浏览器自动播放策略要求 AudioContext 必须在【用户手势】中创建或解锁，
+ *   而倒计时结束是定时器回调，此时新建的音频上下文会被拒绝发声（表现为静音）。
+ *   因此 chime.ts 改为全局复用同一个 AudioContext，并在用户点「开始」时先解锁；
+ *   同时到点后不再弹阻塞式 alert —— 它会卡住主线程、把铃声一起推迟。
+ */
 import { useEffect, useRef, useState } from 'react'
 import { notificationApi } from '../api'
 import { Timer } from 'lucide-react'

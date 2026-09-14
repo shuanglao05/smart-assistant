@@ -1,3 +1,19 @@
+/**
+ * NotificationBell.tsx —— 通知中心（右上角铃铛）
+ *
+ * 职责：
+ *   轮询未读数并在铃铛上显示角标；点击展开列表，支持标记已读、全部已读、清空。
+ *   通知来源有三类：日程提醒（后端定时任务）、AI 通过 notify_user 工具推送、
+ *   系统消息。
+ *
+ * 组件状态：
+ *   open   —— 面板是否展开
+ *   items  —— 通知列表
+ *   unread —— 未读数量（决定角标是否显示）
+ *
+ * 说明：
+ *   wrapRef 用于判断点击是否落在组件外部，落在外面就收起面板。
+ */
 import { useEffect, useRef, useState } from 'react'
 import { Bell, BellOff } from 'lucide-react'
 import { notificationApi } from '../api'

@@ -52,7 +52,7 @@ from app.tools import (
 # 进程级缓存：conversation_id（以及模型/技能组合）-> 已经构建好的 agent 对象。
 # 原因：每次构建 agent 都要初始化大模型、绑定工具，开销不小；同一个会话
 # 重复提问时直接复用缓存即可，避免反复创建。
-agent_cache: dict[int, object] = {}  # conversation_id -> agent
+agent_cache: dict[int, object] = {}  # 缓存：会话 id -> Agent 对象
 
 # 全局共享一个 SqliteSaver：所有 Agent（包括切换模型 / 技能 / 知识库后重建的）共用同一份记忆，
 # 这样"换模型"时对话历史不会丢。记忆按 thread_id（= 会话 id）天然隔离，不同会话互不干扰。

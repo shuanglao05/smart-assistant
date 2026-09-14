@@ -5,10 +5,10 @@
  *   用同一套表单承载「登录」与「注册」两种模式，靠 mode 状态切换文案与所调接口；
  *   成功后把 JWT 与用户名写入 localStorage，再回调 onLogin() 让上层切到主界面。
  *
- * Props：
+ * 组件属性（props）：
  *   onLogin —— 登录/注册成功后的回调，由 App 传入（收到即切换到已登录布局）。
  *
- * State：
+ * 组件状态（state）：
  *   mode                —— 'login' | 'register'，决定文案与接口
  *   username / password —— 受控输入
  *   error               —— 后端返回的错误信息（如「用户名或密码错误」）
